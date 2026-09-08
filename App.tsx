@@ -39,6 +39,10 @@ const App: React.FC = () => {
   const [sunoModelProfile, setSunoModelProfile] = useState<SunoModelProfile>('auto');
   const [isDirecting, setIsDirecting] = useState(false);
   const [directorNote, setDirectorNote] = useState('');
+  const [directorEngine, setDirectorEngine] = useState<'gemini' | 'local' | 'unknown'>('unknown');
+  const [directorConfidence, setDirectorConfidence] = useState<number | null>(null);
+  const [aiModel, setAiModel] = useState('');
+  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
   
   // AI/Sim State
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
@@ -62,6 +66,22 @@ const App: React.FC = () => {
   const styleRef = useRef<HTMLDivElement>(null); // For scrolling to Tag Selection
   const promptRef = useRef<HTMLDivElement>(null); // For scrolling to Prompt Output (Result)
   const aiInputRef = useRef<HTMLInputElement>(null); // For focusing input
+
+  // Detect whether Gemini server-side AI is configured. The app remains usable with Local Fallback when it is not.
+  useEffect(() => {
+    let active = true;
+    fetch('/api/health')
+      .then(res => res.ok ? res.json() : Promise.reject(new Error('health unavailable')))
+      .then(data => {
+        if (!active) return;
+        setAiConfigured(Boolean(data.aiConfigured));
+        setAiModel(typeof data.model === 'string' ? data.model : '');
+      })
+      .catch(() => {
+        if (active) setAiConfigured(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   // Update prompt whenever selections or optimized idea change
   useEffect(() => {
@@ -123,6 +143,8 @@ const App: React.FC = () => {
     setLyricsLang('vi');
     setCustomLyricsLang('');
     setDirectorNote('');
+    setDirectorEngine('unknown');
+    setDirectorConfidence(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
     showFeedback('Đã xóa tất cả', 'info');
   };
@@ -245,6 +267,9 @@ const App: React.FC = () => {
       const result = await runMusicDirectorAI(aiInput);
       setOptimizedIdea(result.creativeDirection);
       setDirectorNote(result.rationale);
+      setDirectorEngine(result.engine);
+      setDirectorConfidence(result.confidence);
+      if (result.model) setAiModel(result.model);
       setSelections(prev => {
         const next = { ...prev };
         (Object.keys(result.selections) as CategoryKey[]).forEach(category => {
@@ -253,7 +278,9 @@ const App: React.FC = () => {
         });
         return next;
       });
-      showFeedback('AI Music Director đã phối bộ phong cách hoàn chỉnh!');
+      showFeedback(result.engine === 'gemini'
+        ? 'Gemini Music Director đã phối bộ phong cách hoàn chỉnh!'
+        : 'Local Music Director đã tạo bộ phong cách dự phòng.');
       setTimeout(() => promptRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
     } catch (e) {
       console.error(e);
@@ -470,6 +497,26 @@ const App: React.FC = () => {
                   className="w-full neu-input px-5 py-4 text-lg text-gray-700 placeholder-gray-400"
                 />
                 
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className={`px-3 py-1.5 rounded-full font-bold ${
+                    aiConfigured === true ? 'bg-green-100 text-green-700' :
+                    aiConfigured === false ? 'bg-amber-100 text-amber-700' :
+                    'bg-gray-100 text-gray-500'
+                  }`}>
+                    {aiConfigured === true ? `● Gemini AI${aiModel ? ` · ${aiModel}` : ''}` :
+                     aiConfigured === false ? '● Local Fallback · không cần API key' :
+                     '● Đang kiểm tra AI engine...'}
+                  </span>
+                  {directorConfidence !== null && (
+                    <span className="px-3 py-1.5 rounded-full bg-purple-100 text-purple-700 font-bold">
+                      Confidence {Math.round(directorConfidence * 100)}%
+                    </span>
+                  )}
+                  {directorEngine !== 'unknown' && (
+                    <span className="text-gray-500">Lần chạy gần nhất: {directorEngine === 'gemini' ? 'Gemini' : 'Local'}</span>
+                  )}
+                </div>
+
                 <button
                   onClick={handleMusicDirector}
                   disabled={isDirecting}

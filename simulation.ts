@@ -245,6 +245,9 @@ export interface MusicDirectorResult {
   creativeDirection: string;
   selections: Partial<Record<CategoryKey, string[]>>;
   rationale: string;
+  confidence: number;
+  engine: 'gemini' | 'local';
+  model?: string;
 }
 
 const flattenTagKeys = (map: any): string[] => {
@@ -298,14 +301,23 @@ const musicDirectorFallback = (input: string): MusicDirectorResult => {
     if (hit && !(selections[category] || []).includes(hit)) selections[category] = [...(selections[category] || []), hit];
   };
 
-  if (/buồn|sad|chia tay|mưa|nhớ|cô đơn/.test(hay)) {
+  const mythicMetal = /viking|bắc âu|nordic|rồng|dragon|thần sấm|thunder|valhalla|chiến binh/.test(hay) && /metal|rock|chiến|battle|war|sử thi|epic/.test(hay);
+
+  if (mythicMetal) {
+    addFirstAvailable('genres', ['Folk Metal', 'Symphonic Metal', 'Heavy Metal', 'Cinematic']);
+    addFirstAvailable('moods', ['Epic', 'Dark', 'Aggressive', 'Energetic']);
+    addFirstAvailable('instruments', ['Electric Guitar', 'Drum Kit', 'Choir', 'Timpani', 'Strings']);
+    addFirstAvailable('vocals', ['Male Vocal', 'Choir']);
+    addFirstAvailable('v5Performance', ['Dynamic', 'Expressive']);
+  } else if (/buồn|sad|chia tay|mưa|nhớ|cô đơn/.test(hay)) {
     addFirstAvailable('moods', ['Sad', 'Melancholic', 'Emotional']);
     addFirstAvailable('instruments', ['Piano', 'Acoustic Guitar']);
     addFirstAvailable('v5Performance', ['Expressive', 'Intimate']);
-  } else if (/epic|sử thi|chiến|battle|cinematic/.test(hay)) {
-    addFirstAvailable('genres', ['Cinematic', 'Orchestral']);
+  } else if (/epic|sử thi|chiến|battle|cinematic|war/.test(hay)) {
+    addFirstAvailable('genres', ['Cinematic', 'Orchestral', 'Symphonic Metal']);
+    addFirstAvailable('moods', ['Epic', 'Dark', 'Energetic']);
     addFirstAvailable('instruments', ['Strings', 'Choir', 'Timpani']);
-    addFirstAvailable('v5Performance', ['Dynamic', 'Powerful']);
+    addFirstAvailable('v5Performance', ['Dynamic', 'Expressive']);
   } else if (/dance|edm|club|sôi động|tiệc/.test(hay)) {
     addFirstAvailable('genres', ['EDM', 'Dance Pop']);
     addFirstAvailable('instruments', ['Synthesizer', 'Drum Machine']);
@@ -313,10 +325,13 @@ const musicDirectorFallback = (input: string): MusicDirectorResult => {
   }
 
   addFirstAvailable('structure', ['Verse-Chorus', 'Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus-Outro']);
+  const confidence = mythicMetal ? 0.78 : (Object.keys(selections).length >= 3 ? 0.72 : 0.58);
   return {
     creativeDirection: optimizePromptSim(input),
     selections: sanitizeDirectorSelections(selections),
-    rationale: 'Đã dùng Music Director dự phòng trên thiết bị vì Gemini chưa khả dụng.'
+    rationale: 'Đang dùng Local Fallback vì Gemini/API chưa khả dụng. Bộ thẻ được chọn bằng semantic rules cục bộ.',
+    confidence,
+    engine: 'local'
   };
 };
 
@@ -335,7 +350,15 @@ export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorRe
         : optimizePromptSim(input);
       const cleanSelections = sanitizeDirectorSelections(parsed.selections);
       const rationale = typeof parsed.rationale === 'string' ? parsed.rationale.trim() : 'Đã chọn bộ thẻ cân bằng cho ý tưởng này.';
-      return { creativeDirection, selections: cleanSelections, rationale };
+      const confidence = Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.8)));
+      return {
+        creativeDirection,
+        selections: cleanSelections,
+        rationale,
+        confidence,
+        engine: parsed.engine === 'gemini' ? 'gemini' : 'gemini',
+        model: typeof parsed.model === 'string' ? parsed.model : undefined
+      };
     }
   } catch (error) {
     console.warn('Gemini Music Director failed; using fallback:', error);

@@ -3,6 +3,8 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
 let geminiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
@@ -21,7 +23,8 @@ async function startServer() {
 
   // API health
   app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok" });
+    const configured = Boolean(process.env.GEMINI_API_KEY || process.env.API_KEY);
+    res.json({ status: "ok", aiConfigured: configured, model: GEMINI_MODEL });
   });
 
   // Optimize prompt
@@ -33,7 +36,7 @@ async function startServer() {
         return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
       }
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: GEMINI_MODEL,
         contents: `You are a music creative director preparing an idea for Suno Custom Mode.\n\nUser idea (may be Vietnamese): ${input}\n\nRewrite it into ONE concise English creative direction of 1-2 sentences. Preserve the user's story and emotion. Describe musical mood, energy, arrangement direction and vocal character only when reasonably inferable. Do not invent a named artist, copyrighted song, or celebrity voice. Do not add headings, markdown, brackets, or explanations.`,
       });
       res.json({ result: response.text?.trim() || "" });
@@ -52,7 +55,7 @@ async function startServer() {
         return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
       }
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: GEMINI_MODEL,
         contents: `Turn the following song idea into a compact creative direction for a modern Suno-style music generator.\n\nIDEA: ${input}\n\nReturn only 2-3 concise English sentences. Cover: core mood, genre direction, vocal character if appropriate, key instrumentation, rhythmic feel, arrangement arc, and production texture. Avoid contradictory tags and keyword stuffing. Do not mention a real artist or a copyrighted song. Do not use headings, markdown or meta commentary.`,
       });
       res.json({ result: response.text?.trim() || "" });
@@ -81,7 +84,7 @@ async function startServer() {
           ? "Korean"
           : lang;
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: GEMINI_MODEL,
         contents: `Write original song lyrics for use in Suno Custom Mode.\n\nTOPIC: ${topic}\nSTYLE DIRECTION: ${style}\nLANGUAGE: ${language}\n\nRequirements:\n- Return lyrics only, no explanation.\n- Use useful structural cues such as [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Final Chorus], [Outro] when musically appropriate.\n- Make the chorus memorable but do not over-repeat.\n- Use natural, singable phrasing and coherent imagery.\n- Preserve the requested emotional tone.\n- Do not imitate or mention a specific living artist, copyrighted lyric, or existing song.\n- Avoid stuffing production instructions into every lyric line; structural/performance cues may appear sparingly in brackets.`,
       });
       res.json({ lyrics: response.text?.trim() || "" });
@@ -100,10 +103,37 @@ async function startServer() {
         return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
       }
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `You are an expert AI Music Director preparing inputs for Suno Custom Mode.\n\nUSER IDEA (may be Vietnamese): ${input}\n\nChoose a SMALL, COHERENT set of tags ONLY from the supplied catalog. Avoid contradictory genre, mood, vocal, instrument, production and performance choices. Prefer 1-2 genres, 1-3 moods, 2-5 instruments, 0-2 vocals, 1-2 structure tags, and only a few production/performance tags that materially help.\n\nTAG CATALOG JSON:\n${JSON.stringify(
-          catalog
-        )}\n\nReturn STRICT JSON only with this shape:\n{\n  "creativeDirection": "1-2 concise English sentences for Suno describing the musical concept naturally",\n  "selections": {\n    "genres": [], "production": [], "instruments": [], "moods": [], "vocals": [], "structure": [], "effects": [], "v5Advanced": [], "mixingPresets": [], "animeDrama": [], "v5Performance": []\n  },\n  "rationale": "One short Vietnamese sentence explaining the musical direction"\n}\n\nDo not name a real artist, copyrighted song, or celebrity voice. Do not invent tags outside the catalog.`,
+        model: GEMINI_MODEL,
+        contents: `You are an expert semantic AI Music Director preparing inputs for Suno Custom Mode.
+
+USER IDEA (may be Vietnamese): ${input}
+
+FIRST understand the full musical intent before selecting any tags. Infer only when supported by the idea: genre family, cultural/era flavor, emotional polarity, energy, vocal role, instrumentation, rhythm, arrangement arc, and production character.
+
+THEN rank catalog tags by semantic fit. Select only tags that materially reinforce the SAME concept. Never choose a tag merely because one adjective or keyword overlaps. Avoid contradictory genre, mood, vocal, instrument, production and performance choices.
+
+SELECTION RULES:
+- Prefer 1-2 genres, 1-3 moods, 2-5 instruments, 0-2 vocals, 1-2 structure tags.
+- Keep production/performance/effects sparse and useful.
+- If the catalog lacks an accurate tag, leave that category sparse or empty rather than choosing a misleading substitute.
+- For mythic war / Viking / Nordic / dragon / thunder / heroic battle concepts, when available, strongly prefer semantically related epic, folk, metal, symphonic, cinematic, martial, dark/powerful, choir, war-drum, distorted-guitar, orchestral-percussion or Nordic-folk tags over unrelated sad/romantic tags.
+- For intimate grief / rain / longing concepts, prefer restrained, melancholic, warm, acoustic, expressive choices over unnecessarily epic or aggressive ones.
+- Never force a vocal choice if the idea does not imply one.
+
+TAG CATALOG JSON:
+${JSON.stringify(catalog)}
+
+Return STRICT JSON only with this shape:
+{
+  "creativeDirection": "1-2 concise English sentences for Suno describing the musical concept naturally",
+  "confidence": 0.0,
+  "selections": {
+    "genres": [], "production": [], "instruments": [], "moods": [], "vocals": [], "structure": [], "effects": [], "v5Advanced": [], "mixingPresets": [], "animeDrama": [], "v5Performance": []
+  },
+  "rationale": "One short Vietnamese sentence explaining the musical direction"
+}
+
+Confidence must be a number from 0 to 1 representing confidence that the supplied catalog contains a good fit. If confidence would be below 0.65, prefer fewer selections rather than weak substitutions. Do not name a real artist, copyrighted song, or celebrity voice. Do not invent tags outside the catalog.`,
         config: { responseMimeType: "application/json" },
       });
       const text = response.text?.trim();
@@ -111,7 +141,8 @@ async function startServer() {
         return res.status(500).json({ error: "Empty response from Gemini" });
       }
       const parsed = JSON.parse(text);
-      res.json(parsed);
+      const confidence = Math.max(0, Math.min(1, Number(parsed?.confidence ?? 0.8)));
+      res.json({ ...parsed, confidence, engine: "gemini", model: GEMINI_MODEL });
     } catch (err: any) {
       console.warn("Music Director error:", err);
       res.status(500).json({ error: err.message || "Failed to run Music Director" });
@@ -127,7 +158,7 @@ async function startServer() {
         return res.status(503).json({ error: "GEMINI_API_KEY not configured" });
       }
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: GEMINI_MODEL,
         contents: {
           parts: [
             {
