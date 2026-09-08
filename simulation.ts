@@ -2,7 +2,6 @@
 // Logic ported from original JS and typed
 import { CategoryKey } from './types';
 import { genres, instruments, moods, vocals, structure, effects, production, v5Advanced, mixingPresets, animeDrama, v5Performance } from './data';
-import { GoogleGenAI } from "@google/genai";
 
 // Helper to convert File to Base64 for Gemini API
 const fileToBase64 = (file: File): Promise<string> => {
@@ -20,45 +19,21 @@ const fileToBase64 = (file: File): Promise<string> => {
 };
 
 export const analyzeImageSim = async (file: File): Promise<{ topic: string; tags: string[] }> => {
-  // Check if API KEY is available for real analysis
-  if (process.env.API_KEY) {
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const base64Data = await fileToBase64(file);
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: {
-          parts: [
-            { 
-              inlineData: { 
-                mimeType: file.type || 'image/jpeg', 
-                data: base64Data 
-              } 
-            },
-            { 
-              text: `Analyze this image for music inspiration. 
-              Return a STRICT JSON object (no markdown) with two keys:
-              1. 'topic': A short, creative song description in Vietnamese based on the visual mood.
-              2. 'tags': An array of 5-8 English musical style tags that fit the image (genres, instruments, moods).` 
-            }
-          ]
-        },
-        config: { 
-            responseMimeType: "application/json"
-        }
-      });
-
-      const text = response.text;
-      if (text) {
-        const json = JSON.parse(text);
-        if (json.topic && Array.isArray(json.tags)) {
-           return { topic: json.topic, tags: json.tags };
-        }
+  try {
+    const base64Data = await fileToBase64(file);
+    const res = await fetch('/api/gemini/analyze-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Data, mimeType: file.type || 'image/jpeg' })
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (json.topic && Array.isArray(json.tags)) {
+        return { topic: json.topic, tags: json.tags };
       }
-    } catch (error) {
-      console.warn("Gemini Vision API failed, falling back to simulation:", error);
     }
+  } catch (error) {
+    console.warn("Server Gemini Vision API failed, falling back to simulation:", error);
   }
 
   // Fallback Simulation (if no key or error)
@@ -211,58 +186,56 @@ export const generateLyricsSim = async (topic: string, style: string, lang: stri
 };
 
 // --- Real Gemini helpers for the Suno Prompt Workstation ---
-// These use the Google AI Studio injected API key when available and fall back safely.
-const getGeminiClient = () => {
-  try {
-    if (process.env.API_KEY) return new GoogleGenAI({ apiKey: process.env.API_KEY });
-  } catch (_) {}
-  return null;
-};
-
+// These proxy requests to the backend server which holds the Gemini API key securely.
 export const optimizePromptAI = async (input: string): Promise<string> => {
-  const ai = getGeminiClient();
-  if (!ai) return optimizePromptSim(input);
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `You are a music creative director preparing an idea for Suno Custom Mode.\n\nUser idea (may be Vietnamese): ${input}\n\nRewrite it into ONE concise English creative direction of 1-2 sentences. Preserve the user's story and emotion. Describe musical mood, energy, arrangement direction and vocal character only when reasonably inferable. Do not invent a named artist, copyrighted song, or celebrity voice. Do not add headings, markdown, brackets, or explanations.`,
+    const res = await fetch('/api/gemini/optimize-prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input })
     });
-    return response.text?.trim() || optimizePromptSim(input);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.result) return data.result;
+    }
   } catch (error) {
     console.warn('Gemini idea optimization failed; using fallback:', error);
-    return optimizePromptSim(input);
   }
+  return optimizePromptSim(input);
 };
 
 export const generatePromptAI = async (input: string): Promise<string> => {
-  const ai = getGeminiClient();
-  if (!ai) return generatePromptSim(input);
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `Turn the following song idea into a compact creative direction for a modern Suno-style music generator.\n\nIDEA: ${input}\n\nReturn only 2-3 concise English sentences. Cover: core mood, genre direction, vocal character if appropriate, key instrumentation, rhythmic feel, arrangement arc, and production texture. Avoid contradictory tags and keyword stuffing. Do not mention a real artist or a copyrighted song. Do not use headings, markdown or meta commentary.`,
+    const res = await fetch('/api/gemini/generate-prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input })
     });
-    return response.text?.trim() || generatePromptSim(input);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.result) return data.result;
+    }
   } catch (error) {
     console.warn('Gemini Suno prompt generation failed; using fallback:', error);
-    return generatePromptSim(input);
   }
+  return generatePromptSim(input);
 };
 
 export const generateLyricsAI = async (topic: string, style: string, lang: string): Promise<string> => {
-  const ai = getGeminiClient();
-  if (!ai) return generateLyricsSim(topic, style, lang);
-  const language = lang === 'vi' ? 'Vietnamese' : lang === 'en' ? 'English' : lang === 'ja' ? 'Japanese' : lang === 'ko' ? 'Korean' : lang;
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `Write original song lyrics for use in Suno Custom Mode.\n\nTOPIC: ${topic}\nSTYLE DIRECTION: ${style}\nLANGUAGE: ${language}\n\nRequirements:\n- Return lyrics only, no explanation.\n- Use useful structural cues such as [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Final Chorus], [Outro] when musically appropriate.\n- Make the chorus memorable but do not over-repeat.\n- Use natural, singable phrasing and coherent imagery.\n- Preserve the requested emotional tone.\n- Do not imitate or mention a specific living artist, copyrighted lyric, or existing song.\n- Avoid stuffing production instructions into every lyric line; structural/performance cues may appear sparingly in brackets.`,
+    const res = await fetch('/api/gemini/generate-lyrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic, style, lang })
     });
-    return response.text?.trim() || generateLyricsSim(topic, style, lang);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.lyrics) return data.lyrics;
+    }
   } catch (error) {
     console.warn('Gemini lyrics generation failed; using fallback:', error);
-    return generateLyricsSim(topic, style, lang);
   }
+  return generateLyricsSim(topic, style, lang);
 };
 
 
@@ -348,27 +321,24 @@ const musicDirectorFallback = (input: string): MusicDirectorResult => {
 };
 
 export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorResult> => {
-  const ai = getGeminiClient();
-  if (!ai) return musicDirectorFallback(input);
-
   const catalog = Object.fromEntries((Object.keys(allowedTags) as CategoryKey[]).map(k => [k, allowedTags[k]]));
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `You are an expert AI Music Director preparing inputs for Suno Custom Mode.\n\nUSER IDEA (may be Vietnamese): ${input}\n\nChoose a SMALL, COHERENT set of tags ONLY from the supplied catalog. Avoid contradictory genre, mood, vocal, instrument, production and performance choices. Prefer 1-2 genres, 1-3 moods, 2-5 instruments, 0-2 vocals, 1-2 structure tags, and only a few production/performance tags that materially help.\n\nTAG CATALOG JSON:\n${JSON.stringify(catalog)}\n\nReturn STRICT JSON only with this shape:\n{\n  "creativeDirection": "1-2 concise English sentences for Suno describing the musical concept naturally",\n  "selections": {\n    "genres": [], "production": [], "instruments": [], "moods": [], "vocals": [], "structure": [], "effects": [], "v5Advanced": [], "mixingPresets": [], "animeDrama": [], "v5Performance": []\n  },\n  "rationale": "One short Vietnamese sentence explaining the musical direction"\n}\n\nDo not name a real artist, copyrighted song, or celebrity voice. Do not invent tags outside the catalog.`,
-      config: { responseMimeType: 'application/json' }
+    const res = await fetch('/api/gemini/music-director', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input, catalog })
     });
-    const text = response.text?.trim();
-    if (!text) return musicDirectorFallback(input);
-    const parsed = JSON.parse(text);
-    const creativeDirection = typeof parsed.creativeDirection === 'string' && parsed.creativeDirection.trim()
-      ? parsed.creativeDirection.trim()
-      : optimizePromptSim(input);
-    const cleanSelections = sanitizeDirectorSelections(parsed.selections);
-    const rationale = typeof parsed.rationale === 'string' ? parsed.rationale.trim() : 'Đã chọn bộ thẻ cân bằng cho ý tưởng này.';
-    return { creativeDirection, selections: cleanSelections, rationale };
+    if (res.ok) {
+      const parsed = await res.json();
+      const creativeDirection = typeof parsed.creativeDirection === 'string' && parsed.creativeDirection.trim()
+        ? parsed.creativeDirection.trim()
+        : optimizePromptSim(input);
+      const cleanSelections = sanitizeDirectorSelections(parsed.selections);
+      const rationale = typeof parsed.rationale === 'string' ? parsed.rationale.trim() : 'Đã chọn bộ thẻ cân bằng cho ý tưởng này.';
+      return { creativeDirection, selections: cleanSelections, rationale };
+    }
   } catch (error) {
     console.warn('Gemini Music Director failed; using fallback:', error);
-    return musicDirectorFallback(input);
   }
+  return musicDirectorFallback(input);
 };
