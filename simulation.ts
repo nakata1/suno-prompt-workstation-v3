@@ -287,7 +287,7 @@ const sanitizeDirectorSelections = (raw: any): Partial<Record<CategoryKey, strin
   return result;
 };
 
-const musicDirectorFallback = (input: string): MusicDirectorResult => {
+const musicDirectorFallback = (input: string, isOverloaded: boolean = false): MusicDirectorResult => {
   const base = suggestTagsSim(input);
   const selections: Partial<Record<CategoryKey, string[]>> = {};
   base.forEach(({category, tag}) => {
@@ -326,10 +326,14 @@ const musicDirectorFallback = (input: string): MusicDirectorResult => {
 
   addFirstAvailable('structure', ['Verse-Chorus', 'Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus-Outro']);
   const confidence = mythicMetal ? 0.78 : (Object.keys(selections).length >= 3 ? 0.72 : 0.58);
+  const rationale = isOverloaded
+    ? 'Gemini đang tạm thời quá tải, đã chuyển sang Local Fallback. Bộ thẻ được chọn bằng semantic rules cục bộ.'
+    : 'Đang dùng Local Fallback vì Gemini/API chưa khả dụng. Bộ thẻ được chọn bằng semantic rules cục bộ.';
+
   return {
     creativeDirection: optimizePromptSim(input),
     selections: sanitizeDirectorSelections(selections),
-    rationale: 'Đang dùng Local Fallback vì Gemini/API chưa khả dụng. Bộ thẻ được chọn bằng semantic rules cục bộ.',
+    rationale,
     confidence,
     engine: 'local'
   };
@@ -337,6 +341,7 @@ const musicDirectorFallback = (input: string): MusicDirectorResult => {
 
 export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorResult> => {
   const catalog = Object.fromEntries((Object.keys(allowedTags) as CategoryKey[]).map(k => [k, allowedTags[k]]));
+  let isOverloaded = false;
   try {
     const res = await fetch('/api/gemini/music-director', {
       method: 'POST',
@@ -360,8 +365,19 @@ export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorRe
         model: typeof parsed.model === 'string' ? parsed.model : undefined
       };
     }
+
+    try {
+      const errData = await res.json();
+      if (errData?.transient === true || errData?.code === 429 || (errData?.code === 503 && errData?.transient !== false)) {
+        isOverloaded = true;
+      }
+    } catch {
+      if (res.status === 429 || res.status === 503) {
+        isOverloaded = true;
+      }
+    }
   } catch (error) {
     console.warn('Gemini Music Director failed; using fallback:', error);
   }
-  return musicDirectorFallback(input);
+  return musicDirectorFallback(input, isOverloaded);
 };
