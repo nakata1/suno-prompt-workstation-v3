@@ -1,6 +1,6 @@
 {
   "name": "Suno Prompt Workstation 2026 v4",
-  "description": "Semantic idea-to-prompt workstation for Suno Custom Mode with V4.3 Music Director Quality Engine, Primary Intent Lock, Unsupported Inference & Genre Drift guards, Prompt Health V2, and robust Gemini/Local fallback.",
+  "description": "Semantic idea-to-prompt workstation for Suno Custom Mode with V4.5 Blueprint Visualizer + Intent Inspector, Authoritative Music Intent Profile, Deterministic Conflict Detector, Primary Intent Lock, and robust Gemini/Local fallback.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

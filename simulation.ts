@@ -9,7 +9,15 @@ import {
   buildUserIntentProfile,
   applyQualityEngine,
   isTagExcluded,
+  MusicBlueprint,
+  buildMusicBlueprint,
 } from './semanticValidator';
+import { MusicIntentProfile, buildMusicIntentProfile } from './musicIntentProfile';
+import {
+  determineVocalAuthority,
+  sanitizeSelectionsByVocalAuthority,
+  sanitizeCreativeDirectionByVocalAuthority,
+} from './vocalAuthority';
 
 // Helper to convert File to Base64 for Gemini API
 const fileToBase64 = (file: File): Promise<string> => {
@@ -403,8 +411,10 @@ export interface MusicDirectorResult {
   engine: 'gemini' | 'local';
   model?: string;
   primaryIntent?: PrimaryIntent;
+  blueprint?: MusicBlueprint;
   coherenceScore?: number;
   fallbackReason?: 'overload' | 'unavailable';
+  intentProfile?: MusicIntentProfile;
 }
 
 const flattenTagKeys = (map: any): string[] => {
@@ -444,103 +454,145 @@ const sanitizeDirectorSelections = (raw: any): Partial<Record<CategoryKey, strin
   return result;
 };
 
-const musicDirectorFallback = (input: string, isOverloaded: boolean = false): MusicDirectorResult => {
+export const musicDirectorFallback = (input: string, isOverloaded: boolean = false, inputBlueprint?: MusicBlueprint): MusicDirectorResult => {
   const profile = buildUserIntentProfile(input);
+  const blueprint = inputBlueprint || buildMusicBlueprint(input);
   const base = suggestTagsSim(input);
   const selections: Partial<Record<CategoryKey, string[]>> = {};
+
   base.forEach(({category, tag}) => {
-    if (!isTagExcluded(category, tag, profile.exclusions)) {
+    if (!isTagExcluded(category, tag, profile.exclusions) && !blueprint.exclusions.some(e => e.toLowerCase() === tag.toLowerCase())) {
       selections[category] = Array.from(new Set([...(selections[category] || []), tag]));
     }
   });
 
-  const positiveHay = profile.exclusions.positiveText.toLowerCase();
   const addFirstAvailable = (category: CategoryKey, candidates: string[]) => {
     const allowed = new Set(allowedTags[category]);
-    const hit = candidates.find(x => allowed.has(x) && !isTagExcluded(category, x, profile.exclusions));
+    const hit = candidates.find(x => allowed.has(x) && !isTagExcluded(category, x, profile.exclusions) && !blueprint.exclusions.some(e => e.toLowerCase() === x.toLowerCase()));
     if (hit && !(selections[category] || []).includes(hit)) {
       selections[category] = [...(selections[category] || []), hit];
     }
   };
 
-  // 1. Nordic Mythic Metal Preset (Strictly guarded against metal exclusion)
-  const mythicMetal = !profile.exclusions.excludeMetal &&
-    /viking|bắc âu|nordic|rồng|dragon|thần sấm|thunder|valhalla|chiến binh/.test(positiveHay) &&
-    /metal|rock|chiến|battle|war|sử thi|epic/.test(positiveHay);
-
-  if (mythicMetal) {
-    addFirstAvailable('genres', ['Folk Metal', 'Symphonic Metal', 'Heavy Metal', 'Cinematic']);
-    addFirstAvailable('moods', ['Epic', 'Dark', 'Aggressive', 'Energetic']);
-    addFirstAvailable('instruments', ['Electric Guitar', 'Drum Kit', 'Choir', 'Timpani', 'Strings']);
-    addFirstAvailable('vocals', ['Male Vocal', 'Choir']);
-    addFirstAvailable('v5Performance', ['Dynamic', 'Expressive']);
-  }
-  // 2. Vietnamese Acoustic Ballad & Intimate Ballad Preset (Guarded against acoustic exclusion)
-  else if (!profile.exclusions.excludeAcoustic && (profile.culturalStyle === 'vietnamese' || profile.isAcoustic || /v-pop|acoustic|ballad|tình ca|mưa|nhớ|buồn|cô đơn/i.test(positiveHay))) {
+  // 1. Authoritative Blueprint primary style mapping
+  if (blueprint.primaryStyle === 'Vietnamese V-Pop acoustic ballad' || blueprint.primaryStyle.includes('acoustic ballad') || blueprint.primaryStyle.includes('ballad')) {
     addFirstAvailable('genres', ['Acoustic', 'Pop']);
     addFirstAvailable('moods', ['Nostalgic', 'Melancholic', 'Heartfelt', 'Warm', 'Sad']);
+    // Guarantee required instruments from Blueprint
+    blueprint.instruments.required.forEach(inst => {
+      addFirstAvailable('instruments', [inst]);
+    });
     addFirstAvailable('instruments', ['Piano', 'Acoustic Guitar', 'String Section']);
-    if (profile.vocalGender === 'male') {
+    if (blueprint.vocals.gender === 'male' || profile.vocalGender === 'male') {
       addFirstAvailable('vocals', ['Male Vocal', 'Soulful Singing']);
-    } else if (profile.vocalGender === 'female') {
+    } else if (blueprint.vocals.gender === 'female' || profile.vocalGender === 'female') {
       addFirstAvailable('vocals', ['Female Vocal', 'Airy Vocal']);
-    } else {
-      addFirstAvailable('vocals', ['Male Vocal', 'Female Vocal']);
+    } else if (blueprint.vocals.presence === 'instrumental') {
+      addFirstAvailable('structure', ['Instrumental']);
     }
     addFirstAvailable('v5Performance', ['Intimate', 'Expressive']);
     addFirstAvailable('production', ['Acoustic', 'Organic']);
   }
-  // 3. Cinematic Battle / Epic Score (Guarded against heavy / metal exclusions)
-  else if (!profile.exclusions.excludeMetal && /epic|sử thi|chiến|battle|cinematic|war/.test(positiveHay)) {
-    addFirstAvailable('genres', ['Cinematic', 'Orchestral', 'Symphonic Metal']);
-    addFirstAvailable('moods', ['Epic', 'Dark', 'Energetic']);
-    addFirstAvailable('instruments', ['Strings', 'Choir', 'Timpani']);
+  else if (blueprint.primaryStyle === 'Nordic symphonic folk metal' && !profile.exclusions.excludeMetal) {
+    addFirstAvailable('genres', ['Folk Metal', 'Symphonic Metal', 'Heavy Metal', 'Cinematic']);
+    addFirstAvailable('moods', ['Epic', 'Dark', 'Aggressive', 'Energetic']);
+    blueprint.instruments.required.forEach(inst => {
+      addFirstAvailable('instruments', [inst]);
+    });
+    addFirstAvailable('instruments', ['Electric Guitar', 'Drum Kit', 'Choir', 'Timpani', 'Strings']);
+    if (blueprint.vocals.presence === 'instrumental') {
+      addFirstAvailable('structure', ['Instrumental']);
+    } else if (blueprint.vocals.gender === 'female' || profile.vocalGender === 'female') {
+      addFirstAvailable('vocals', ['Female Vocal', 'Choir']);
+    } else {
+      addFirstAvailable('vocals', ['Male Vocal', 'Choir']);
+    }
     addFirstAvailable('v5Performance', ['Dynamic', 'Expressive']);
   }
-  // 4. EDM / Dance (Guarded against EDM exclusion)
-  else if (!profile.exclusions.excludeEdm && /dance|edm|club|sôi động|tiệc/.test(positiveHay)) {
+  else if ((blueprint.primaryStyle === 'modern festival future bass EDM' || blueprint.primaryStyle.includes('EDM')) && !profile.exclusions.excludeEdm) {
     addFirstAvailable('genres', ['EDM', 'Dance Pop']);
-    addFirstAvailable('instruments', ['Synthesizer', 'Drum Machine']);
     addFirstAvailable('moods', ['Energetic', 'Uplifting']);
+    blueprint.instruments.required.forEach(inst => {
+      addFirstAvailable('instruments', [inst]);
+    });
+    addFirstAvailable('instruments', ['Synthesizer', 'Drum Machine']);
+    addFirstAvailable('production', ['[Bass Drop]']);
+    if (blueprint.vocals.gender === 'female' || profile.vocalGender === 'female') {
+      addFirstAvailable('vocals', ['Female Vocal']);
+    }
   }
-  // 5. Lo-Fi (Guarded against Lo-Fi exclusion)
-  else if (!profile.exclusions.excludeLofi && (profile.isLofi || /lo-fi|lofi|chillhop/.test(positiveHay))) {
+  else if ((blueprint.primaryStyle === 'Lo-Fi study piano' || blueprint.primaryStyle.includes('Lo-Fi')) && !profile.exclusions.excludeLofi) {
     addFirstAvailable('genres', ['Lo-Fi Hip Hop']);
     addFirstAvailable('moods', ['Chill', 'Relaxed', 'Nostalgic']);
+    blueprint.instruments.required.forEach(inst => {
+      addFirstAvailable('instruments', [inst]);
+    });
     addFirstAvailable('instruments', ['Piano', 'Drum Machine']);
     addFirstAvailable('production', ['Lo-Fi', 'Vinyl Crackle']);
+    if (blueprint.vocals.presence === 'instrumental') {
+      addFirstAvailable('structure', ['Instrumental']);
+    }
+  }
+  else if (blueprint.primaryStyle === 'cinematic orchestral battle score' || blueprint.primaryStyle.includes('orchestral') || blueprint.primaryStyle.includes('battle')) {
+    addFirstAvailable('genres', ['Cinematic', 'Orchestral']);
+    addFirstAvailable('moods', ['Epic', 'Dark', 'Energetic']);
+    blueprint.instruments.required.forEach(inst => {
+      addFirstAvailable('instruments', [inst]);
+    });
+    addFirstAvailable('instruments', ['Strings', 'Choir', 'Timpani']);
+    addFirstAvailable('v5Performance', ['Dynamic', 'Expressive']);
+    if (blueprint.vocals.presence === 'instrumental') {
+      addFirstAvailable('structure', ['Instrumental']);
+    }
   }
 
   addFirstAvailable('structure', ['Verse-Chorus', 'Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus-Outro']);
-  const confidence = mythicMetal ? 0.78 : (Object.keys(selections).length >= 3 ? 0.72 : 0.58);
+  const confidence = Math.max(0.72, blueprint.confidence);
   const cd = optimizePromptSim(input);
   const rawClean = sanitizeDirectorSelections(selections);
-  const intent = derivePrimaryIntent(input, cd, rawClean, profile);
-  const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent, profile);
-  const { selections: finalSelections } = applyQualityEngine(validatedSelections, intent, profile);
+  const intent = derivePrimaryIntent(input, cd, rawClean, profile, blueprint);
+  const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent, profile, blueprint);
+  const { selections: rawFinalSelections } = applyQualityEngine(validatedSelections, intent, profile);
+
+  // Deterministic final vocal constraint enforcement pass
+  const vocalAuth = determineVocalAuthority(input, blueprint, profile);
+  const finalSelections = sanitizeSelectionsByVocalAuthority(rawFinalSelections, vocalAuth);
+  const constrainedCd = sanitizeCreativeDirectionByVocalAuthority(cd, vocalAuth);
 
   const fallbackReason: 'overload' | 'unavailable' = isOverloaded ? 'overload' : 'unavailable';
   const rationale = isOverloaded
-    ? 'Gemini đang tạm thời quá tải, đã chuyển sang Local Fallback. Bộ thẻ được chọn bằng semantic rules cục bộ.'
-    : 'Đang dùng Local Fallback vì Gemini/API chưa khả dụng. Bộ thẻ được chọn bằng semantic rules cục bộ.';
+    ? `Gemini đang tạm thời quá tải, đã kích hoạt Local Fallback chuẩn Blueprint ("${blueprint.primaryStyle}").`
+    : `Đang dùng Local Fallback chuẩn Blueprint ("${blueprint.primaryStyle}").`;
+
+  const intentProfile = buildMusicIntentProfile(
+    input,
+    blueprint,
+    finalSelections,
+    'local',
+    confidence,
+    fallbackReason
+  );
 
   return {
-    creativeDirection: cd,
+    creativeDirection: constrainedCd,
     selections: finalSelections,
     rationale,
     confidence,
     engine: 'local',
     primaryIntent: intent,
+    blueprint,
     coherenceScore: Math.round(confidence * 100),
-    fallbackReason
+    fallbackReason,
+    intentProfile
   };
 };
 
 export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorResult> => {
+  const blueprint = buildMusicBlueprint(input);
   const catalog = Object.fromEntries((Object.keys(allowedTags) as CategoryKey[]).map(k => [k, allowedTags[k]]));
   let isOverloaded = false;
   try {
-    const res = await safeFetchGeminiApi<any>('/api/gemini/music-director', { input, catalog });
+    const res = await safeFetchGeminiApi<any>('/api/gemini/music-director', { input, catalog, blueprint });
     if (res.ok && res.data) {
       const parsed = res.data;
       const profile = buildUserIntentProfile(input);
@@ -550,22 +602,38 @@ export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorRe
       const rawClean = sanitizeDirectorSelections(parsed.selections);
       // Clean exclusions for Gemini results to guarantee strict parity
       (Object.keys(rawClean) as CategoryKey[]).forEach(cat => {
-        rawClean[cat] = (rawClean[cat] || []).filter(t => !isTagExcluded(cat, t, profile.exclusions));
+        rawClean[cat] = (rawClean[cat] || []).filter(t => !isTagExcluded(cat, t, profile.exclusions) && !blueprint.exclusions.some(e => e.toLowerCase() === t.toLowerCase()));
       });
-      const intent = derivePrimaryIntent(input, creativeDirection, rawClean, profile);
-      const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent, profile);
-      const { selections: finalSelections } = applyQualityEngine(validatedSelections, intent, profile);
-      const rationale = typeof parsed.rationale === 'string' ? parsed.rationale.trim() : 'Đã chọn bộ thẻ cân bằng cho ý tưởng này.';
+      const intent = derivePrimaryIntent(input, creativeDirection, rawClean, profile, blueprint);
+      const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent, profile, blueprint);
+      const { selections: rawFinalSelections } = applyQualityEngine(validatedSelections, intent, profile);
+
+      // Deterministic final vocal constraint enforcement pass
+      const vocalAuth = determineVocalAuthority(input, blueprint, profile);
+      const finalSelections = sanitizeSelectionsByVocalAuthority(rawFinalSelections, vocalAuth);
+      const constrainedCd = sanitizeCreativeDirectionByVocalAuthority(creativeDirection, vocalAuth);
+
+      const rationale = typeof parsed.rationale === 'string' ? parsed.rationale.trim() : `Đã phối hợp thẻ tối ưu theo Music Blueprint "${blueprint.primaryStyle}".`;
       const confidence = Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.8)));
+      const intentProfile = buildMusicIntentProfile(
+        input,
+        blueprint,
+        finalSelections,
+        'gemini',
+        confidence
+      );
+
       return {
-        creativeDirection,
+        creativeDirection: constrainedCd,
         selections: finalSelections,
         rationale,
         confidence,
         engine: 'gemini',
         model: typeof parsed.model === 'string' ? parsed.model : undefined,
         primaryIntent: intent,
-        coherenceScore: Math.round(confidence * 100)
+        blueprint,
+        coherenceScore: Math.round(confidence * 100),
+        intentProfile
       };
     }
 
@@ -575,5 +643,5 @@ export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorRe
   } catch (error) {
     console.warn('Gemini Music Director failed; using fallback:', error);
   }
-  return musicDirectorFallback(input, isOverloaded);
+  return musicDirectorFallback(input, isOverloaded, blueprint);
 };

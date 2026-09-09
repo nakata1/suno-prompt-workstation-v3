@@ -1,6 +1,12 @@
 import { SelectionState } from './types';
 import { derivePrimaryIntent } from './semanticValidator';
 import { buildUserIntentProfile } from './musicQualityEngine';
+import { MusicBlueprint, buildMusicBlueprint } from './musicBlueprint';
+import {
+  determineVocalAuthority,
+  sanitizeSelectionsByVocalAuthority,
+  sanitizePromptOutputByVocalAuthority
+} from './vocalAuthority';
 
 export type SunoModelProfile = 'auto' | 'v5.5';
 
@@ -33,68 +39,100 @@ export const composeSunoStylePrompt = (
   idea: string,
   optimizedIdea: string,
   selections: SelectionState,
-  modelProfile: SunoModelProfile = 'auto'
+  modelProfile: SunoModelProfile = 'auto',
+  inputBlueprint?: MusicBlueprint
 ): string => {
   const profile = buildUserIntentProfile(idea);
-  const intent = derivePrimaryIntent(idea, optimizedIdea, selections, profile);
+  const blueprint = inputBlueprint || buildMusicBlueprint(idea);
+  const vocalAuth = determineVocalAuthority(idea, blueprint, profile);
+  const cleanSelections = sanitizeSelectionsByVocalAuthority(selections, vocalAuth);
+  const intent = derivePrimaryIntent(idea, optimizedIdea, cleanSelections, profile, blueprint);
 
   const sentences: string[] = [];
 
-  // 1. Dominant genre & Primary Intent Opening Sentence
-  const article = /^[aeiou]/i.test(intent.descriptor) ? 'an' : 'a';
-  let opening = `Create ${article} ${intent.descriptor}`;
-  if (profile.explicitArrangement.length > 0 && profile.explicitInstruments.length > 0) {
-    const arrText = profile.explicitArrangement.join(', ');
-    const instText = profile.explicitInstruments.slice(0, 3).join(', ');
-    opening += ` with ${arrText} driven by ${instText.toLowerCase()}`;
+  // 1. Dominant genre & Primary Style Opening Sentence
+  const styleDescriptor = blueprint.primaryStyle || intent.descriptor;
+  const article = /^[aeiou]/i.test(styleDescriptor) ? 'an' : 'a';
+  let opening = `Create ${article} ${styleDescriptor}`;
+
+  if (blueprint.arrangement.intro || blueprint.arrangement.climax || blueprint.arrangement.ending) {
+    const progressionParts = [
+      blueprint.arrangement.intro,
+      blueprint.arrangement.development,
+      blueprint.arrangement.climax,
+      blueprint.arrangement.ending
+    ].filter(Boolean);
+    const instEmphasis = blueprint.instruments.required.length > 0
+      ? ` driven by ${blueprint.instruments.required.slice(0, 3).join(', ').toLowerCase()}`
+      : '';
+    opening += ` featuring ${progressionParts.join(', ')}${instEmphasis}`;
   } else if (intent.atmosphere) {
     opening += ` with ${intent.atmosphere}`;
   }
   sentences.push(opening.trim());
 
-  // 2. Emotional tone & mood nuances (excluding words already prominent in the opening)
+  // 2. Emotional atmosphere (avoiding words already prominent in the opening)
   const openingLower = sentences[0].toLowerCase();
-  const remainingMoods = selections.moods.filter(m => !openingLower.includes(m.toLowerCase()));
-  if (remainingMoods.length) {
-    sentences.push(`Emotional tone: ${unique(remainingMoods).join(', ')}`);
+  const allMoods = unique([...blueprint.moods, ...cleanSelections.moods])
+    .filter(m => !openingLower.includes(m.toLowerCase()) && !blueprint.exclusions.some(e => e.toLowerCase() === m.toLowerCase()));
+  if (allMoods.length) {
+    sentences.push(`Emotional tone: ${allMoods.join(', ')}`);
   }
 
-  // 3. Instrumentation
-  if (selections.instruments.length) {
-    const instList = unique(selections.instruments).join(', ');
-    sentences.push(`Instrumentation: ${instList}, arranged with dynamic balance and spatial clarity`);
+  // 3. Required Instrumentation
+  const allInst = unique([
+    ...blueprint.instruments.required,
+    ...cleanSelections.instruments
+  ]).filter(inst => !blueprint.instruments.excluded.some(ex => ex.toLowerCase() === inst.toLowerCase()));
+  if (allInst.length) {
+    sentences.push(`Instrumentation: ${allInst.join(', ')}, arranged with dynamic balance and spatial clarity`);
   }
 
-  // 4. Vocal Character (Vocal Fidelity Lock)
-  if (profile.isInstrumental || selections.structure.includes('Instrumental')) {
+  // 4. Vocal Character (Authoritative Vocal Constraint Enforcement)
+  if (vocalAuth.authority === 'instrumental' || cleanSelections.structure.includes('Instrumental')) {
     sentences.push('Instrumental composition without lead vocals, emphasizing expressive melodic phrasing');
-  } else if (selections.vocals.length) {
-    if (profile.vocalGender === 'male') {
-      const textures = profile.vocalTexture.length ? profile.vocalTexture.join(' ') : 'warm mature';
-      sentences.push(`Vocal character: ${textures} male vocal, natural phrasing with heartfelt delivery`);
-    } else if (profile.vocalGender === 'female') {
-      const textures = profile.vocalTexture.length ? profile.vocalTexture.join(' ') : 'airy';
-      sentences.push(`Vocal character: ${textures} female vocal hooks, clear phrasing with emotional nuance`);
-    } else if (profile.vocalGender === 'choir') {
-      sentences.push('Vocal character: soaring choir with harmonic grandeur and commanding resonance');
-    } else {
-      const vocalList = unique(selections.vocals).join(', ');
-      sentences.push(`Vocal character: ${vocalList}, natural phrasing with emotionally believable delivery`);
-    }
+  } else if (vocalAuth.authority === 'female') {
+    const rawChars = blueprint.vocals.character.length
+      ? blueprint.vocals.character
+      : (vocalAuth.textures.length ? vocalAuth.textures : []);
+    const safeChars = rawChars.filter(c => !/(?<!fe)male|\bdeep\b|\bnam\b/i.test(c));
+    const textures = safeChars.length ? safeChars.join(' ') + ' ' : '';
+    sentences.push(`Vocal character: ${textures}female vocal hooks, clear phrasing with emotional nuance`);
+  } else if (vocalAuth.authority === 'male') {
+    const rawChars = blueprint.vocals.character.length
+      ? blueprint.vocals.character
+      : (vocalAuth.textures.length ? vocalAuth.textures : ['warm', 'mature']);
+    const safeChars = rawChars.filter(c => !/female|\bnữ\b|\bnu\b/i.test(c));
+    const textures = safeChars.length ? safeChars.join(' ') + ' ' : '';
+    sentences.push(`Vocal character: ${textures}male vocal, natural phrasing with heartfelt delivery`);
+  } else if (vocalAuth.authority === 'mixed') {
+    sentences.push('Vocal character: romantic duet with male and female vocals, interwoven harmonies and emotional depth');
+  } else if (blueprint.vocals.gender === 'mixed' || profile.vocalGender === 'choir') {
+    sentences.push('Vocal character: soaring choir with harmonic grandeur and commanding resonance');
+  } else if (cleanSelections.vocals.length) {
+    const vocalList = unique(cleanSelections.vocals).join(', ');
+    sentences.push(`Vocal character: ${vocalList}, natural phrasing with emotionally believable delivery`);
   }
 
-  // 5. Rhythm and pacing
-  sentences.push(`Rhythm and pacing: ${inferTempo(selections, idea, profile.exclusions.positiveText)}`);
+  // 5. Rhythm and pacing / Energy
+  const pacingDesc = inferTempo(cleanSelections, idea, profile.exclusions.positiveText);
+  sentences.push(`Rhythm and pacing: ${pacingDesc}`);
 
   // 6. Arrangement arc
-  sentences.push(`Arrangement arc: ${inferArc(selections)}`);
+  if (blueprint.arrangement.structuralCues.length > 0) {
+    sentences.push(`Arrangement arc: clear song form with ${join(blueprint.arrangement.structuralCues).toLowerCase()}`);
+  } else {
+    sentences.push(`Arrangement arc: ${inferArc(cleanSelections)}`);
+  }
 
-  // 7. Production aesthetic
+  // 7. Production aesthetic & Texture
   const rawProd = [
-    ...selections.production,
-    ...selections.mixingPresets,
-    ...selections.v5Performance,
-    ...selections.effects
+    ...blueprint.production.orientation,
+    ...blueprint.production.texture,
+    ...cleanSelections.production,
+    ...cleanSelections.mixingPresets,
+    ...cleanSelections.v5Performance,
+    ...cleanSelections.effects
   ];
   // Filter out generic buzzwords
   const prodElements = unique(rawProd.filter(p => !/studio quality|masterpiece|high-fidelity/i.test(p)));
@@ -103,7 +141,7 @@ export const composeSunoStylePrompt = (
   }
 
   // Stylistic nuances (Anime/Drama, V5 Advanced)
-  const specialElements = unique([...selections.animeDrama, ...selections.v5Advanced]);
+  const specialElements = unique([...cleanSelections.animeDrama, ...cleanSelections.v5Advanced]);
   if (specialElements.length) {
     sentences.push(`Stylistic nuances: ${specialElements.join(', ')}`);
   }
@@ -117,21 +155,26 @@ export const composeSunoStylePrompt = (
   }
 
   // Directional priority for Suno
-  if (modelProfile === 'v5.5') {
+  if (vocalAuth.authority === 'instrumental') {
+    sentences.push('Prioritize expressive instrumental performance, rich arrangement detail, strong prompt adherence, and natural musical transitions');
+  } else if (modelProfile === 'v5.5') {
     sentences.push('Prioritize expressive vocals, rich arrangement detail, strong prompt adherence, and natural musical transitions');
   } else {
     sentences.push('Prioritize strong prompt adherence, expressive performance, rich arrangement detail, and natural musical transitions');
   }
 
-  return sentences.map(s => clean(s).replace(/[.]+$/, '')).filter(Boolean).join('. ') + '.';
+  const rawPrompt = sentences.map(s => clean(s).replace(/[.]+$/, '')).filter(Boolean).join('. ') + '.';
+  return sanitizePromptOutputByVocalAuthority(rawPrompt, vocalAuth);
 };
 
 export const recommendSunoSettings = (
   idea: string,
   selections: SelectionState,
-  modelProfile: SunoModelProfile = 'auto'
+  modelProfile: SunoModelProfile = 'auto',
+  inputBlueprint?: MusicBlueprint
 ): SunoSettingsRecommendation => {
   const profile = buildUserIntentProfile(idea);
+  const blueprint = inputBlueprint || buildMusicBlueprint(idea);
   const positiveHay = `${profile.exclusions.positiveText} ${Object.values(selections).flat().join(' ')}`.toLowerCase();
   const experimental = /experimental|avant|glitch|noise|hyperpop|breakcore|abstract|psychedelic|thực nghiệm/.test(positiveHay);
   const strict = /ballad|classical|orchestral|bolero|folk|acoustic|worship|trữ tình|dân ca/.test(positiveHay);
@@ -149,19 +192,33 @@ export const recommendSunoSettings = (
 
   const exclude: string[] = [];
 
-  // Direct transfer of explicit user-negated terms into Suno Exclude Styles setting
+  // Direct transfer of Blueprint and explicit user exclusions into Suno Exclude Styles setting
+  if (blueprint.exclusions.length > 0) {
+    exclude.push(...blueprint.exclusions);
+  }
   if (profile.exclusions.excludedKeywords.length > 0) {
     exclude.push(...profile.exclusions.excludedKeywords);
   }
 
-  if (/acoustic|folk|ballad|bolero|piano/.test(positiveHay)) {
+  // Vocal Authority negative constraints for Suno Exclude Styles
+  const vocalAuth = determineVocalAuthority(idea, blueprint, profile);
+  if (vocalAuth.authority === 'instrumental') {
+    if (!exclude.includes('vocals')) exclude.push('vocals');
+    if (!exclude.includes('singing')) exclude.push('singing');
+  } else if (vocalAuth.authority === 'female') {
+    if (!exclude.includes('male vocal')) exclude.push('male vocal');
+  } else if (vocalAuth.authority === 'male') {
+    if (!exclude.includes('female vocal')) exclude.push('female vocal');
+  }
+
+  if (/acoustic|folk|ballad|bolero|piano/.test(positiveHay) || blueprint.primaryStyle.includes('ballad')) {
     if (!exclude.includes('harsh distortion')) exclude.push('harsh distortion');
     if (!exclude.includes('overly busy drums')) exclude.push('overly busy drums');
   }
-  if (/cinematic|orchestral|classical/.test(positiveHay)) {
+  if (/cinematic|orchestral|classical/.test(positiveHay) || blueprint.primaryStyle.includes('orchestral')) {
     if (!exclude.includes('cheap synth presets')) exclude.push('cheap synth presets');
   }
-  if (/lo-fi|lofi/.test(positiveHay) && !profile.exclusions.excludeLofi) {
+  if ((/lo-fi|lofi/.test(positiveHay) || blueprint.primaryStyle.includes('Lo-Fi')) && !profile.exclusions.excludeLofi) {
     if (!exclude.includes('over-polished mastering')) exclude.push('over-polished mastering');
   }
 

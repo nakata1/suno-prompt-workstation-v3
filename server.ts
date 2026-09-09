@@ -169,24 +169,47 @@ async function startServer() {
   // AI Music Director
   app.post("/api/gemini/music-director", async (req, res) => {
     try {
-      const { input, catalog } = req.body;
+      const { input, catalog, blueprint } = req.body;
       const ai = getGeminiClient();
       if (!ai) {
         return res.status(503).json({ error: "GEMINI_API_KEY not configured", code: 503, transient: false });
       }
+
+      const blueprintSection = blueprint
+        ? `\nAUTHORITATIVE MUSIC BLUEPRINT:
+- Primary Style: ${blueprint.primaryStyle || 'N/A'}
+- Exclusions: ${blueprint.exclusions?.length ? blueprint.exclusions.join(', ') : 'None'}
+- Required Instruments: ${blueprint.instruments?.required?.length ? blueprint.instruments.required.join(', ') : 'None'}
+- Vocals: Presence: ${blueprint.vocals?.presence || 'unspecified'}, Gender: ${blueprint.vocals?.gender || 'unspecified'}, Character: ${blueprint.vocals?.character?.join(', ') || 'None'}
+- Energy Arc: ${blueprint.energy?.start || 'N/A'} -> ${blueprint.energy?.middle || 'N/A'} -> ${blueprint.energy?.climax || 'N/A'} -> ${blueprint.energy?.ending || 'N/A'}
+
+CRITICAL BLUEPRINT DIRECTIVES:
+1. The Music Blueprint is the AUTHORITATIVE representation of the user's musical intent.
+2. Preserve all explicit requirements and required instruments without replacing them.
+3. Do NOT violate exclusions or introduce excluded genres/instruments.
+4. Do NOT introduce strong unsupported secondary genres or contradictory elements.
+`
+        : '';
+
       const response = await callWithRetry(() =>
         ai.models.generateContent({
           model: GEMINI_MODEL,
           contents: `You are an expert semantic AI Music Director preparing inputs for Suno Custom Mode.
 
 USER IDEA (may be Vietnamese): ${input}
-
+${blueprintSection}
 FIRST understand the full musical intent before selecting any tags. Infer only when supported by the idea: genre family, cultural/era flavor, emotional polarity, energy, vocal role, instrumentation, rhythm, arrangement arc, and production character.
 
 THEN rank catalog tags by semantic fit. Select only tags that materially reinforce the SAME concept. Never choose a tag merely because one adjective or keyword overlaps. Avoid contradictory genre, mood, vocal, instrument, production and performance choices.
 
 SELECTION RULES:
 - CRITICAL EXCLUSION RULE: If the user explicitly excludes or negates any genre, style, instrument, vocal, or production element (e.g., using "không", "tránh", "loại bỏ", "no", "without", "avoid", "exclude", e.g., "không EDM, không metal, không Lo-Fi"), you MUST STRICTLY EXCLUDE those tags and any related subgenres/elements from selections!
+- CRITICAL VOCAL AUTHORITY RULE:
+  * If the user or Blueprint requests Female Vocal (or female hooks/voice), select ONLY Female Vocal and feminine vocal nuances. NEVER introduce Male Vocal or male descriptors.
+  * If the user or Blueprint requests Male Vocal, select ONLY Male Vocal and masculine vocal nuances. NEVER introduce Female Vocal.
+  * If the user or Blueprint requests Instrumental / No vocals, select NO vocal tags and structure as Instrumental.
+  * Mixed / Duet vocals should ONLY be selected when both are explicitly requested or in choral arrangements.
+- If a Music Blueprint is provided, strictly preserve its required instruments and do not select tags contradicting its primary style, vocal specification, or exclusions.
 - Prefer 1-2 genres, 1-3 moods, 2-5 instruments, 0-2 vocals, 1-2 structure tags.
 - Keep production/performance/effects sparse and useful.
 - If the catalog lacks an accurate tag, leave that category sparse or empty rather than choosing a misleading substitute.

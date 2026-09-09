@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   genres, instruments, effects, moods, vocals, structure, production, demoTemplates, 
   v5Advanced, mixingPresets, structureTemplates, animeDrama, v5Performance
@@ -7,7 +7,9 @@ import {
 import { SelectionState, CategoryKey } from './types';
 import { composeSunoStylePrompt, recommendSunoSettings, buildSunoExportPack, SunoModelProfile } from './sunoAdapter';
 import { analyzeImageSim, optimizePromptAI, generateLyricsAI, suggestTagsSim, generatePromptAI, runMusicDirectorAI } from './simulation';
-import { createEmptySelections, evaluatePromptHealth, PromptHealthResult } from './semanticValidator';
+import { createEmptySelections, evaluatePromptHealth, PromptHealthResult, buildMusicBlueprint } from './semanticValidator';
+import { BlueprintVisualizer } from './BlueprintVisualizer';
+import { MusicIntentProfile, buildMusicIntentProfile } from './musicIntentProfile';
 import { 
   Wand2, Music, Mic, Layers, Settings, PlayCircle, Copy, Trash2, 
   Image as ImageIcon, Sparkles, Loader2, Info, Languages, Rocket, Zap, Lightbulb,
@@ -94,14 +96,26 @@ const App: React.FC = () => {
     return () => { active = false; };
   }, []);
 
-  // Update prompt whenever selections or optimized idea change
-  useEffect(() => {
-    const prompt = composeSunoStylePrompt(aiInput, optimizedIdea, selections, sunoModelProfile);
-    setGeneratedPrompt(prompt);
-    setPromptHealth(evaluatePromptHealth(aiInput, optimizedIdea, selections, prompt));
-  }, [selections, optimizedIdea, aiInput, sunoModelProfile]);
+  const activeBlueprint = useMemo(() => buildMusicBlueprint(aiInput || optimizedIdea), [aiInput, optimizedIdea]);
 
-  const sunoSettings = recommendSunoSettings(aiInput || optimizedIdea, selections, sunoModelProfile);
+  const activeIntentProfile = useMemo(() => {
+    const currentText = (aiInput || optimizedIdea).trim();
+    if (!currentText) return null;
+    const src = directorEngine === 'gemini' ? 'gemini' : 'local';
+    const conf = directorConfidence !== null ? directorConfidence : (activeBlueprint.confidence * 100);
+    const reason = directorFallbackReason ?? undefined;
+    return buildMusicIntentProfile(currentText, activeBlueprint, selections, src, conf, reason);
+  }, [aiInput, optimizedIdea, activeBlueprint, selections, directorEngine, directorConfidence, directorFallbackReason]);
+
+  const sunoSettings = recommendSunoSettings(aiInput || optimizedIdea, selections, sunoModelProfile, activeBlueprint);
+
+  // Update prompt whenever selections, optimized idea, or activeIntentProfile change
+  useEffect(() => {
+    const blueprint = buildMusicBlueprint(aiInput);
+    const prompt = composeSunoStylePrompt(aiInput, optimizedIdea, selections, sunoModelProfile, blueprint);
+    setGeneratedPrompt(prompt);
+    setPromptHealth(evaluatePromptHealth(aiInput, optimizedIdea, selections, prompt, blueprint, activeIntentProfile || undefined));
+  }, [selections, optimizedIdea, aiInput, sunoModelProfile, activeIntentProfile]);
 
   // Helpers
   const showFeedback = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -262,7 +276,11 @@ const App: React.FC = () => {
     try {
       const result = await runMusicDirectorAI(aiInput);
       setOptimizedIdea(result.creativeDirection);
-      const notePrefix = result.primaryIntent ? `[${result.primaryIntent.label}] ` : '';
+      const notePrefix = result.blueprint?.primaryStyle
+        ? `[${result.blueprint.primaryStyle}] `
+        : result.primaryIntent
+        ? `[${result.primaryIntent.label}] `
+        : '';
       setDirectorNote(`${notePrefix}${result.rationale}`);
       setDirectorEngine(result.engine);
       setDirectorFallbackReason(result.fallbackReason ?? null);
@@ -547,6 +565,9 @@ const App: React.FC = () => {
                     <span className="font-bold text-purple-600">Music Director:</span> {directorNote}
                   </div>
                 )}
+
+                {/* V4.5 Blueprint Visualizer + Intent Inspector */}
+                <BlueprintVisualizer intentProfile={activeIntentProfile} />
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <button 

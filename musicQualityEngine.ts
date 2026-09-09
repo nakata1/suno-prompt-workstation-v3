@@ -24,8 +24,11 @@ export interface ExclusionProfile {
   excludeVocals: boolean;
   excludeFemaleVocal: boolean;
   excludeMaleVocal: boolean;
+  excludeChoir: boolean;
   excludeDrums: boolean;
   excludeHeavyDrums: boolean;
+  excludeWarDrums: boolean;
+  excludeGuitar: boolean;
   excludeElectricGuitar: boolean;
   excludeAcousticGuitar: boolean;
   excludePiano: boolean;
@@ -56,8 +59,11 @@ export const createEmptyExclusionProfile = (text: string): ExclusionProfile => (
   excludeVocals: false,
   excludeFemaleVocal: false,
   excludeMaleVocal: false,
+  excludeChoir: false,
   excludeDrums: false,
   excludeHeavyDrums: false,
+  excludeWarDrums: false,
+  excludeGuitar: false,
   excludeElectricGuitar: false,
   excludeAcousticGuitar: false,
   excludePiano: false,
@@ -182,8 +188,11 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
   let excludeVocals = false;
   let excludeFemaleVocal = false;
   let excludeMaleVocal = false;
+  let excludeChoir = false;
   let excludeDrums = false;
   let excludeHeavyDrums = false;
+  let excludeWarDrums = false;
+  let excludeGuitar = false;
   let excludeElectricGuitar = false;
   let excludeAcousticGuitar = false;
   let excludePiano = false;
@@ -240,14 +249,24 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
         if (!rawExclusions.includes('Hip-Hop')) rawExclusions.push('Hip-Hop');
       }
 
-      // Check Electric Guitar vs Acoustic Guitar
+      // Check Electric Guitar vs Acoustic Guitar vs Generic Guitar
       if (/\b(?:electric\s*guitar|guitar\s*điện|distorted\s*guitar)\b/i.test(p)) {
         excludeElectricGuitar = true;
         if (!rawExclusions.includes('Electric Guitar')) rawExclusions.push('Electric Guitar');
-      }
-      if (/\b(?:acoustic\s*guitar|guitar\s*acoustic|guitar\s*thùng|guitar\s*mộc)\b/i.test(p)) {
+      } else if (/\b(?:acoustic\s*guitar|guitar\s*acoustic|guitar\s*thùng|guitar\s*mộc)\b/i.test(p)) {
         excludeAcousticGuitar = true;
         if (!rawExclusions.includes('Acoustic Guitar')) rawExclusions.push('Acoustic Guitar');
+      } else if (/\b(?:guitar|đàn\s*guitar|tiếng\s*guitar)\b/i.test(p)) {
+        excludeGuitar = true;
+        excludeElectricGuitar = true;
+        excludeAcousticGuitar = true;
+        if (!rawExclusions.includes('Guitar')) rawExclusions.push('Guitar');
+      }
+
+      // Check Choir
+      if (/\b(?:choir|hợp\s*xướng|hop\s*xuong)\b/i.test(p)) {
+        excludeChoir = true;
+        if (!rawExclusions.includes('Choir')) rawExclusions.push('Choir');
       }
 
       // Check Acoustic in general (if not specifically guitar)
@@ -257,7 +276,11 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
       }
 
       // Check Drums
-      if (/\b(?:drum\s*mạnh|heavy\s*drums?|power\s*drums?|trống\s*mạnh|trống\s*chiến|war\s*drums?)\b/i.test(p)) {
+      if (/\b(?:war\s*drums?|trống\s*chiến|trống\s*trận)\b/i.test(p)) {
+        excludeWarDrums = true;
+        excludeHeavyDrums = true;
+        if (!rawExclusions.includes('War Drums')) rawExclusions.push('War Drums');
+      } else if (/\b(?:drum\s*mạnh|heavy\s*drums?|power\s*drums?|trống\s*mạnh|aggressive\s*drums?)\b/i.test(p)) {
         excludeHeavyDrums = true;
         if (!rawExclusions.includes('Heavy Drums')) rawExclusions.push('Heavy Drums');
       } else if (/\b(?:drums?|trống|drum\s*kit)\b/i.test(p)) {
@@ -270,7 +293,7 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
       if (/\b(?:giọng\s*nữ|female\s*vocals?|nữ\s*hát|female\s*voice)\b/i.test(p)) {
         excludeFemaleVocal = true;
         if (!rawExclusions.includes('Female Vocal')) rawExclusions.push('Female Vocal');
-      } else if (/\b(?:giọng\s*nam|male\s*vocals?|nam\s*hát|male\s*voice)\b/i.test(p)) {
+      } else if (/\b(?:giọng\s*nam|(?<!fe)male\s*vocals?|nam\s*hát|(?<!fe)male\s*voice)\b/i.test(p)) {
         excludeMaleVocal = true;
         if (!rawExclusions.includes('Male Vocal')) rawExclusions.push('Male Vocal');
       } else if (/\b(?:vocals?|giọng|hát|lời|tiếng\s*hát)\b/i.test(p)) {
@@ -285,13 +308,13 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
       }
 
       // Check Synthesizer
-      if (/\b(?:synth|synthesizer|sawtooth|sub-bass)\b/i.test(p)) {
+      if (/\b(?:synth|synthesizer|sawtooth|sub-bass|electronic\s*synth)\b/i.test(p)) {
         excludeSynthesizer = true;
         if (!rawExclusions.includes('Synthesizer')) rawExclusions.push('Synthesizer');
       }
 
       // Check Strings
-      if (/\b(?:strings?|dàn\s*dây|dan\s*day|violin|cello)\b/i.test(p)) {
+      if (/\b(?:strings?|dàn\s*dây|dan\s*day|violin|cello|orchestral\s*strings?)\b/i.test(p)) {
         excludeStrings = true;
         if (!rawExclusions.includes('Strings')) rawExclusions.push('Strings');
       }
@@ -339,8 +362,11 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
     excludeVocals,
     excludeFemaleVocal,
     excludeMaleVocal,
+    excludeChoir,
     excludeDrums,
     excludeHeavyDrums,
+    excludeWarDrums,
+    excludeGuitar,
     excludeElectricGuitar,
     excludeAcousticGuitar,
     excludePiano,
@@ -389,9 +415,11 @@ export const isTagExcluded = (
   }
 
   if (category === 'instruments') {
+    if (exclusions.excludeGuitar && tagLower.includes('guitar')) return true;
     if (exclusions.excludeElectricGuitar && (tag === 'Electric Guitar' || tag === 'Distorted Guitar')) return true;
     if (exclusions.excludeAcousticGuitar && tag === 'Acoustic Guitar') return true;
     if (exclusions.excludePiano && tagLower.includes('piano')) return true;
+    if (exclusions.excludeWarDrums && (tag === 'Taiko' || tagLower.includes('war drum') || tag === 'Timpani')) return true;
     if (exclusions.excludeDrums && (tagLower.includes('drum') || tag === 'Taiko' || tag === 'Timpani' || tag === '808 Kick')) return true;
     if (exclusions.excludeHeavyDrums && (tag === '808 Kick' || tag === 'Power Drums' || tag === 'Electronic Drums')) return true;
     if (exclusions.excludeSynthesizer && (tag === 'Synthesizer' || tag === 'Sawtooth Wave' || tag === 'Sub-bass')) return true;
@@ -400,6 +428,7 @@ export const isTagExcluded = (
 
   if (category === 'vocals') {
     if (exclusions.excludeVocals) return true;
+    if (exclusions.excludeChoir && /choir|hợp xướng/i.test(tagLower)) return true;
     if (exclusions.excludeFemaleVocal && (tag === 'Female Vocal' || tag === 'Female Harmony')) return true;
     if (exclusions.excludeMaleVocal && (tag === 'Male Vocal' || tag === 'Male Vocoder')) return true;
   }
@@ -471,28 +500,28 @@ export const buildUserIntentProfile = (rawInput: string): UserIntentProfile => {
   const lower = text.toLowerCase();
 
   // 1. Vocal Analysis
-  let isInstrumental = exclusions.excludeVocals || /không lời|khong loi|instrumental|no vocals?|without vocals?|nhạc không lời/i.test(lower);
+  let isInstrumental = exclusions.excludeVocals || /\b(?:không\s+(?:lời|vocal|hát)|khong\s+(?:loi|vocal|hat)|nhạc\s+không\s+lời|nhac\s+khong\s+loi|instrumental|no\s+vocals?|without\s+vocals?|zero\s+vocals?)\b/i.test(lower);
   let vocalGender: UserIntentProfile['vocalGender'] = 'unspecified';
   if (isInstrumental) {
     vocalGender = 'none';
-  } else if (/giọng\s*nam|giong\s*nam|male\s*vocal|male\s*voice|vocal\s*nam|nam\s*hát|nam\s*hat/i.test(lower)) {
-    vocalGender = exclusions.excludeMaleVocal ? 'unspecified' : 'male';
-  } else if (/giọng\s*nữ|giong\s*nu|female\s*vocal|female\s*voice|vocal\s*nữ|vocal\s*nu|nữ\s*hát|nu\s*hat|female\s*hooks?/i.test(lower)) {
-    vocalGender = exclusions.excludeFemaleVocal ? 'unspecified' : 'female';
-  } else if (/song ca|duet|nam nữ|nam nu/i.test(lower)) {
+  } else if (/\b(?:song\s*ca|duet|nam\s*nữ|nam\s*nu|both\s*male\s*and\s*female|male\s*(?:and|&)\s*female|female\s*(?:and|&)\s*male|mixed\s*vocals?)\b/i.test(lower)) {
     vocalGender = 'duet';
-  } else if (/hợp xướng|hop xuong|choir|gregorian/i.test(lower)) {
+  } else if (/\b(?:giọng\s*nữ|giong\s*nu|female\s*vocals?|female\s*voice|vocal\s*nữ|vocal\s*nu|nữ\s*hát|nu\s*hat|female\s*hooks?)\b/i.test(lower)) {
+    vocalGender = exclusions.excludeFemaleVocal ? 'unspecified' : 'female';
+  } else if (/\b(?:giọng\s*nam|giong\s*nam|(?<!fe)male\s*vocals?|(?<!fe)male\s*voice|vocal\s*nam|nam\s*hát|nam\s*hat)\b/i.test(lower)) {
+    vocalGender = exclusions.excludeMaleVocal ? 'unspecified' : 'male';
+  } else if (/\b(?:hợp\s*xướng|hop\s*xuong|choir|gregorian)\b/i.test(lower)) {
     vocalGender = 'choir';
   }
 
   const vocalTexture: string[] = [];
-  if (/ấm áp|am ap|warm/i.test(lower)) vocalTexture.push('warm');
-  if (/mature|trưởng thành|chững chạc/i.test(lower)) vocalTexture.push('mature');
-  if (/airy|thoáng nhẹ|thoang nhe|breathy/i.test(lower)) vocalTexture.push('airy');
-  if (/raspy|khàn|khan|gritty/i.test(lower)) vocalTexture.push('raspy');
-  if (/deep|trầm|tram/i.test(lower)) vocalTexture.push('deep');
-  if (/operatic|opera/i.test(lower)) vocalTexture.push('operatic');
-  if (/screaming|growling|gào thét|gao thet/i.test(lower) && !exclusions.excludeMetal) vocalTexture.push('screaming');
+  if (/\b(?:ấm\s*áp|am\s*ap|warm)\b/i.test(lower)) vocalTexture.push('warm');
+  if (/\b(?:mature|trưởng\s*thành|chững\s*chạc)\b/i.test(lower)) vocalTexture.push('mature');
+  if (/\b(?:airy|thoáng\s*nhẹ|thoang\s*nhe|breathy)\b/i.test(lower)) vocalTexture.push('airy');
+  if (/\b(?:raspy|khàn|khan|gritty)\b/i.test(lower)) vocalTexture.push('raspy');
+  if (/\b(?:deep|trầm|tram)\s+(?:voice|vocal|tone|giọng)|giọng\s+trầm\b/i.test(lower)) vocalTexture.push('deep');
+  if (/\b(?:operatic|opera)\b/i.test(lower)) vocalTexture.push('operatic');
+  if (/\b(?:screaming|growling|gào\s*thét|gao\s*thet)\b/i.test(lower) && !exclusions.excludeMetal) vocalTexture.push('screaming');
 
   // 2. Cultural / Regional Analysis
   let culturalStyle: UserIntentProfile['culturalStyle'] = undefined;
@@ -776,7 +805,7 @@ export const applyQualityEngine = (
   } else if (profile.vocalGender === 'male') {
     // Remove female vocal indicators
     result.vocals = result.vocals.filter(v => {
-      if (/female|nữ|nu|idol group/i.test(v)) {
+      if (/\bfemale\b|\bnữ\b|\bnu\b|idol group/i.test(v)) {
         removeTag('vocals', v, 'Xung đột với yêu cầu giọng nam của người dùng');
         return false;
       }
@@ -790,9 +819,9 @@ export const applyQualityEngine = (
       }
     }
   } else if (profile.vocalGender === 'female') {
-    // Remove male vocal indicators
+    // Remove male vocal indicators (prevent false match on 'Female Vocal')
     result.vocals = result.vocals.filter(v => {
-      if (/male|nam|vocoder/i.test(v)) {
+      if (/(?<!fe)male|\bnam\b|vocoder/i.test(v)) {
         removeTag('vocals', v, 'Xung đột với yêu cầu giọng nữ của người dùng');
         return false;
       }
@@ -802,6 +831,12 @@ export const applyQualityEngine = (
 
     if (profile.vocalTexture.includes('airy')) {
       addTag('vocals', 'Airy Vocal');
+    }
+  } else if (profile.vocalGender === 'duet') {
+    // Duet / Mixed allows both
+    if (!result.vocals.includes('Female Vocal') && !result.vocals.includes('Male Vocal')) {
+      addTag('vocals', 'Female Vocal');
+      addTag('vocals', 'Male Vocal');
     }
   }
 

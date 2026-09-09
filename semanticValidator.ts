@@ -7,9 +7,18 @@ import {
   isTagExcluded,
   extractExclusions,
 } from './musicQualityEngine';
+import { MusicBlueprint, buildMusicBlueprint, validateAgainstBlueprint } from './musicBlueprint';
+import { MusicIntentProfile, buildMusicIntentProfile } from './musicIntentProfile';
+import {
+  determineVocalAuthority,
+  VocalAuthorityAnalysis,
+  VocalAuthorityType,
+} from './vocalAuthority';
 
 export { buildUserIntentProfile, applyQualityEngine, hasExplicitSupport, isTagExcluded, extractExclusions };
-export type { UserIntentProfile };
+export { buildMusicBlueprint, validateAgainstBlueprint, buildMusicIntentProfile };
+export { determineVocalAuthority };
+export type { UserIntentProfile, MusicBlueprint, MusicIntentProfile, VocalAuthorityAnalysis, VocalAuthorityType };
 
 export type IntentProfile =
   | 'metal_epic'
@@ -71,17 +80,19 @@ export const createEmptySelections = (): SelectionState => ({
 });
 
 /**
- * Primary Intent Lock:
+ * Primary Intent Lock (V4.4):
  * Derives a concise, dominant Primary Musical Intent from the user idea,
- * creative direction, initial AI selections, and deterministic User Intent Profile.
+ * creative direction, initial AI selections, and deterministic Music Blueprint.
  */
 export const derivePrimaryIntent = (
   idea: string,
   creativeDirection: string,
   selections: Partial<Record<CategoryKey, string[]>>,
-  inputProfile?: UserIntentProfile
+  inputProfile?: UserIntentProfile,
+  inputBlueprint?: MusicBlueprint
 ): PrimaryIntent => {
   const profile = inputProfile || buildUserIntentProfile(idea);
+  const blueprint = inputBlueprint || buildMusicBlueprint(idea);
 
   // Clean selections: filter out any tags that violate user exclusions before intent derivation
   const cleanGenres = (selections.genres || []).filter(g => !isTagExcluded('genres', g, profile.exclusions));
@@ -96,6 +107,72 @@ export const derivePrimaryIntent = (
 
   // CRITICAL: use profile.exclusions.positiveText instead of raw idea so negated keywords NEVER contribute positive score!
   const text = `${profile.exclusions.positiveText} ${creativeDirection} ${g} ${m} ${inst} ${v}`.toLowerCase();
+
+  // Authoritative Blueprint resolution check
+  if (blueprint.primaryStyle === 'Vietnamese V-Pop acoustic ballad') {
+    return {
+      label: 'Vietnamese V-Pop acoustic ballad',
+      profile: 'acoustic_ballad',
+      descriptor: 'intimate Vietnamese V-Pop acoustic ballad',
+      atmosphere: 'poignant acoustic reflection, lyrical warmth, delicate piano, and gentle strings at the climax',
+      isAcoustic: true,
+      isIntimate: true,
+      isHeavy: false,
+      isElectronic: false,
+    };
+  }
+
+  if (blueprint.primaryStyle === 'Nordic symphonic folk metal' && !profile.exclusions.excludeMetal) {
+    return {
+      label: 'Nordic symphonic folk metal',
+      profile: 'metal_epic',
+      descriptor: 'epic Nordic symphonic folk-metal track',
+      atmosphere: 'icy mythic atmosphere, thunderous war drums, heavy electric guitars, and heroic choir',
+      isAcoustic: false,
+      isIntimate: false,
+      isHeavy: true,
+      isElectronic: false,
+    };
+  }
+
+  if (blueprint.primaryStyle === 'modern festival future bass EDM' && !profile.exclusions.excludeEdm) {
+    return {
+      label: 'modern festival future bass EDM',
+      profile: 'edm_electronic',
+      descriptor: 'modern festival future-bass EDM track',
+      atmosphere: 'escalating build-up, punchy percussion, and an explosive drop with wide supersaws and sub-bass',
+      isAcoustic: false,
+      isIntimate: false,
+      isHeavy: false,
+      isElectronic: true,
+    };
+  }
+
+  if (blueprint.primaryStyle === 'Lo-Fi study piano' && !profile.exclusions.excludeLofi) {
+    return {
+      label: 'Lo-Fi study piano',
+      profile: 'lofi_chill',
+      descriptor: 'mellow lo-fi study piano track',
+      atmosphere: 'warm tape texture, soft felt piano chords, subtle vinyl crackle, and gentle drum groove',
+      isAcoustic: false,
+      isIntimate: true,
+      isHeavy: false,
+      isElectronic: true,
+    };
+  }
+
+  if (blueprint.primaryStyle === 'cinematic orchestral battle score') {
+    return {
+      label: 'cinematic orchestral battle score',
+      profile: 'cinematic_orchestral',
+      descriptor: 'cinematic orchestral battle score',
+      atmosphere: 'slow tension build into a huge climax with thunderous brass, strings, and timpani',
+      isAcoustic: false,
+      isIntimate: false,
+      isHeavy: true,
+      isElectronic: false,
+    };
+  }
 
   // 1. Nordic / Viking / Symphonic / Folk Metal
   const isNordicMythic = profile.culturalStyle === 'nordic' || /viking|bắc âu|nordic|valhalla|dragon|rồng|thần sấm|thor|odin|battle|chiến binh/.test(text);
@@ -306,19 +383,23 @@ export const derivePrimaryIntent = (
 };
 
 /**
- * Deterministic Semantic Validator with V4.3 Quality Engine Integration:
+ * Deterministic Semantic Validator with V4.4 Music Blueprint Integration:
  * 1. Validates tag coherence against the Primary Intent Lock.
- * 2. Applies Unsupported Inference Guard, Genre Drift Guard, Vocal Fidelity Lock,
+ * 2. Applies Blueprint Verification (purging excluded concepts, enforcing vocal rules, inserting required instruments).
+ * 3. Applies Unsupported Inference Guard, Genre Drift Guard, Vocal Fidelity Lock,
  *    and Instrument Fidelity via applyQualityEngine.
  */
 export const validateSelectionsWithIntent = (
   rawSelections: Partial<Record<CategoryKey, string[]>>,
   intent: PrimaryIntent,
-  userProfile?: UserIntentProfile | string
+  userProfile?: UserIntentProfile | string,
+  inputBlueprint?: MusicBlueprint
 ): { validatedSelections: SelectionState; removedTags: RemovedTagReport[] } => {
   const profile = typeof userProfile === 'string'
     ? buildUserIntentProfile(userProfile)
     : userProfile || buildUserIntentProfile(intent.label);
+
+  const blueprint = inputBlueprint || buildMusicBlueprint(profile.exclusions.positiveText);
 
   const result = createEmptySelections();
   const removed: RemovedTagReport[] = [];
@@ -360,13 +441,13 @@ export const validateSelectionsWithIntent = (
 
     list.forEach(tag => {
       // Pre-Rule 0: Exclusion & Negation Guard (Priority 1)
-      if (isTagExcluded(category, tag, profile.exclusions)) {
-        rejectTag(category, tag, `Yếu tố "${tag}" bị loại trừ rõ ràng theo yêu cầu người dùng`);
+      if (isTagExcluded(category, tag, profile.exclusions) || blueprint.exclusions.some(e => e.toLowerCase() === tag.toLowerCase())) {
+        rejectTag(category, tag, `Yếu tố "${tag}" bị loại trừ rõ ràng theo Blueprint của người dùng`);
         return;
       }
 
       // Rule 1: Acoustic Ballads & Piano Ballads Contradiction Guard
-      if (intent.profile === 'acoustic_ballad' || intent.profile === 'piano_ballad') {
+      if (intent.profile === 'acoustic_ballad' || intent.profile === 'piano_ballad' || blueprint.primaryStyle.includes('ballad')) {
         if (category === 'genres' && (heavyMetalGenres.has(tag) || aggressiveEdmGenres.has(tag))) {
           rejectTag(category, tag, `Không phù hợp với bản ballad mộc (${intent.label})`);
           return;
@@ -428,9 +509,14 @@ export const validateSelectionsWithIntent = (
     });
   });
 
-  // Apply V4.3 Quality Engine Pipeline:
-  // Unsupported Inference Guard, Genre Drift Guard, Vocal Fidelity Lock, Instrument Fidelity
-  const quality = applyQualityEngine(result, intent, profile);
+  // Step 2: Validate against authoritative Blueprint (repair missing required instruments, enforce vocal fidelity)
+  const bpValidation = validateAgainstBlueprint(result, blueprint);
+  bpValidation.repairs.forEach(rep => {
+    removed.push({ category: 'production', tag: 'Blueprint Repair', reason: rep });
+  });
+
+  // Step 3: Apply V4.3 Quality Engine Pipeline
+  const quality = applyQualityEngine(bpValidation.validatedSelections as SelectionState, intent, profile);
 
   return {
     validatedSelections: quality.selections,
@@ -439,9 +525,9 @@ export const validateSelectionsWithIntent = (
 };
 
 /**
- * Deterministic Prompt Health V2 Evaluator:
+ * Deterministic Prompt Health V3 Evaluator:
  * Calculates a 0-100 quality score and status without calling Gemini.
- * Evaluates tag density, primary intent alignment, unsupported strong additions,
+ * Evaluates Blueprint fidelity, tag density, primary intent alignment, unsupported strong additions,
  * era drift, vocal contradiction, explicit instrument omission, arrangement progression,
  * and language leakage.
  */
@@ -449,12 +535,15 @@ export const evaluatePromptHealth = (
   idea: string,
   optimizedIdea: string,
   selections: SelectionState,
-  promptText: string
+  promptText: string,
+  inputBlueprint?: MusicBlueprint,
+  inputIntentProfile?: MusicIntentProfile
 ): PromptHealthResult => {
   let score = 95;
   const reasons: string[] = [];
   const profile = buildUserIntentProfile(idea);
-  const intent = derivePrimaryIntent(idea, optimizedIdea, selections, profile);
+  const blueprint = inputBlueprint || buildMusicBlueprint(idea);
+  const intent = derivePrimaryIntent(idea, optimizedIdea, selections, profile, blueprint);
 
   const totalTags = Object.values(selections).reduce((acc, list) => acc + list.length, 0);
 
@@ -496,19 +585,33 @@ export const evaluatePromptHealth = (
 
   const promptLower = promptText.toLowerCase();
 
-  // 2. Unsupported Strong Genre Additions Guard
+  // 2. Blueprint Primary Style Fidelity & Alignment
+  const hasStyleMismatch =
+    (blueprint.primaryStyle.includes('ballad') && /metal|screaming|heavy distorted/i.test(promptLower)) ||
+    (blueprint.primaryStyle.includes('metal') && /bubblegum|kawaii|chillhop/i.test(promptLower)) ||
+    (blueprint.primaryStyle.includes('EDM') && /acoustic folk|unplugged/i.test(promptLower));
+
+  if (hasStyleMismatch) {
+    score -= 20;
+    reasons.push(`Lệch phong cách chủ đạo Blueprint: phát hiện yếu tố xung đột với "${blueprint.primaryStyle}"`);
+  } else {
+    score += 5;
+    reasons.push(`Bám sát phong cách chủ đạo Blueprint: ${blueprint.primaryStyle}`);
+  }
+
+  // 3. Unsupported Strong Genre Additions Guard
   const strongGenres = ['1980s', 'Retro', 'Synthwave', 'Cyberpunk', 'Lo-Fi', 'Metal', 'Trap', 'Jazz', 'Gospel'];
   const unsupportedInSelections = strongGenres.filter(sg => {
     const hasTag = selections.genres.includes(sg) || selections.production.includes(sg);
-    return hasTag && !hasExplicitSupport(sg, profile);
+    return hasTag && !hasExplicitSupport(sg, profile) && !blueprint.secondaryStyles.includes(sg);
   });
   if (unsupportedInSelections.length > 0) {
     score -= 18;
     reasons.push(`Phát hiện thể loại mạnh chưa có căn cứ từ yêu cầu: ${unsupportedInSelections.join(', ')}`);
   }
 
-  // 3. Era Drift Guard
-  if (profile.isModernExplicit) {
+  // 4. Era Drift Guard
+  if (profile.isModernExplicit || blueprint.production.era === 'modern') {
     const hasOldEra = selections.production.some(p => p === '1980s' || p === 'Retro' || p === 'Vintage' || p === '1970s') ||
       promptLower.includes('1980s') || promptLower.includes('synthwave');
     if (hasOldEra) {
@@ -517,61 +620,93 @@ export const evaluatePromptHealth = (
     }
   }
 
-  // 4. Vocal Contradiction Guard
-  if (profile.vocalGender === 'male' && (selections.vocals.includes('Female Vocal') || /female vocal/i.test(promptLower))) {
-    score -= 25;
-    reasons.push('Xung đột giọng hát: người dùng yêu cầu giọng nam nhưng xuất hiện giọng nữ');
-  } else if (profile.vocalGender === 'female' && (selections.vocals.includes('Male Vocal') || /male vocal/i.test(promptLower))) {
-    score -= 25;
-    reasons.push('Xung đột giọng hát: người dùng yêu cầu giọng nữ nhưng xuất hiện giọng nam');
-  } else if (profile.isInstrumental && (selections.vocals.length > 0 || (promptLower.includes('vocal') && !promptLower.includes('no vocal') && !promptLower.includes('instrumental')))) {
-    score -= 25;
-    reasons.push('Xung đột: người dùng yêu cầu nhạc không lời nhưng prompt có chứa giọng hát');
+  // 5. Vocal Fidelity & Contradiction Guard (Authoritative Vocal Enforcement)
+  const vocalAuth = determineVocalAuthority(idea, blueprint, profile);
+  if (vocalAuth.authority === 'instrumental') {
+    const hasVocalTags = selections.vocals.length > 0;
+    const hasVocalText = /(?<!no\s+|without\s+|zero\s+)vocals?|\bsinging\b|\bchoir\b/i.test(promptLower) &&
+      !/instrumental composition without lead vocals/i.test(promptLower);
+    if (hasVocalTags || hasVocalText) {
+      score -= 30;
+      reasons.push('Xung đột: Yêu cầu định dạng không lời (Instrumental) nhưng xuất hiện yếu tố giọng hát');
+    } else {
+      score += 5;
+      reasons.push('Bảo toàn chuẩn xác định dạng không lời (Instrumental)');
+    }
+  } else if (vocalAuth.authority === 'female') {
+    const hasMaleTag = selections.vocals.some(v => /(?<!fe)male|\bnam\b/i.test(v));
+    const hasMaleText = /(?<!fe)male\s*(?:vocal|voice|hooks?)|deep\s+male/i.test(promptLower);
+    if (hasMaleTag || hasMaleText) {
+      score -= 30;
+      reasons.push('Xung đột giọng hát: Người dùng/Blueprint yêu cầu giọng nữ (Female Vocal) nhưng xuất hiện giọng nam');
+    } else {
+      score += 5;
+      reasons.push('Bảo toàn chuẩn xác thẩm quyền giọng nữ (Female Vocal Authority)');
+    }
+  } else if (vocalAuth.authority === 'male') {
+    const hasFemaleTag = selections.vocals.some(v => /female|\bnữ\b|\bnu\b/i.test(v));
+    const hasFemaleText = /female\s*(?:vocal|voice|hooks?)|airy\s+female/i.test(promptLower);
+    if (hasFemaleTag || hasFemaleText) {
+      score -= 30;
+      reasons.push('Xung đột giọng hát: Người dùng/Blueprint yêu cầu giọng nam (Male Vocal) nhưng xuất hiện giọng nữ');
+    } else {
+      score += 5;
+      reasons.push('Bảo toàn chuẩn xác thẩm quyền giọng nam (Male Vocal Authority)');
+    }
+  } else if (vocalAuth.authority === 'mixed') {
+    score += 5;
+    reasons.push('Bảo toàn chuẩn xác định dạng song ca / hợp xướng đa giọng (Duet / Mixed)');
+  } else if (blueprint.vocals.gender !== 'unspecified') {
+    score += 5;
+    reasons.push(`Bảo toàn chuẩn xác giọng hát: ${blueprint.vocals.gender}`);
   }
 
-  // 5. Explicit Instrument Omission Guard
-  if (profile.explicitInstruments.length > 0) {
-    const missing = profile.explicitInstruments.filter(inst => {
-      const inSel = selections.instruments.includes(inst);
-      const inPrompt = promptLower.includes(inst.toLowerCase());
+  // 6. Explicit Required Instrument Omission Guard
+  if (blueprint.instruments.required.length > 0) {
+    const missing = blueprint.instruments.required.filter(inst => {
+      const instL = inst.toLowerCase();
+      const inSel = selections.instruments.some(i => i.toLowerCase().includes(instL) || instL.includes(i.toLowerCase()));
+      const inPrompt = promptLower.includes(instL);
       return !inSel && !inPrompt;
     });
     if (missing.length > 0) {
       score -= 15;
       reasons.push(`Bỏ sót nhạc cụ người dùng yêu cầu trực tiếp: ${missing.join(', ')}`);
+    } else {
+      score += 5;
+      reasons.push('Bảo tồn đầy đủ tất cả nhạc cụ chủ đạo trong Blueprint');
     }
   }
 
-  // 6. Arrangement Mismatch Guard
-  if (profile.explicitArrangement.length > 0) {
-    const expectsDrop = profile.explicitArrangement.some(a => a.includes('drop'));
+  // 7. Arrangement & Energy Arc Coherence
+  if (blueprint.arrangement.climax) {
+    const expectsDrop = blueprint.arrangement.climax.includes('drop');
     const hasDrop = selections.production.includes('[Bass Drop]') || promptLower.includes('drop');
     if (expectsDrop && !hasDrop) {
       score -= 10;
       reasons.push('Chưa phản ánh đoạn cao trào / drop người dùng yêu cầu');
+    } else {
+      score += 5;
+      reasons.push('Đường cong năng lượng và cao trào phát triển nhất quán');
     }
   }
 
-  // 7. Language Leakage into English prompt
+  // 8. Language Leakage into English prompt
   const vietnameseLeakRegex = /\b(bài hát về|lời bài hát|giọng nam|giọng nữ|đoạn cao trào|điệp khúc|mở đầu|kết thúc|không lời|tiếng việt|nhạc mộc)\b/i;
   if (vietnameseLeakRegex.test(promptText)) {
     score -= 15;
     reasons.push('Phát hiện rò rỉ cụm từ tiếng Việt vào prompt phong cách tiếng Anh');
-  }
-
-  // 8. Acoustic vs Heavy clash check
-  const text = `${profile.exclusions.positiveText} ${optimizedIdea} ${promptText}`.toLowerCase();
-  if (intent.isAcoustic && /metal|dubstep|hardcore|screaming|distortion/.test(text)) {
-    score -= 25;
-    reasons.push('Phát hiện xung đột giữa phối khí mộc và hiệu ứng nặng/điện tử');
+  } else {
+    score += 5;
+    reasons.push('Ngôn ngữ prompt tiếng Anh chuẩn xác, không rò rỉ thuật ngữ');
   }
 
   // 9. Negation & Exclusion Contradiction Guard (Major Contradiction)
-  if (profile.exclusions.excludedKeywords.length > 0) {
+  const allExclusions = Array.from(new Set([...profile.exclusions.excludedKeywords, ...blueprint.exclusions.map(e => e.toLowerCase())]));
+  if (allExclusions.length > 0) {
     const leakedExclusions: string[] = [];
-    profile.exclusions.excludedKeywords.forEach(kw => {
+    allExclusions.forEach(kw => {
       if (kw.length >= 3) {
-        // Prevent false positive on sub-words like 'acoustic' when 'electric' is excluded
         const inPrompt = promptLower.split(/[,.\s]+/).some(token => token === kw) || (promptLower.includes(kw) && !promptLower.includes(`no ${kw}`) && !promptLower.includes(`without ${kw}`));
         const inSelections = Object.values(selections).flat().some(t => {
           const tLower = t.toLowerCase();
@@ -586,6 +721,30 @@ export const evaluatePromptHealth = (
       score -= 30;
       reasons.push(`Xung đột nghiêm trọng: Yếu tố người dùng đã loại trừ ("${leakedExclusions.join(', ')}") vẫn xuất hiện trong bản phối.`);
     }
+  }
+
+  // Intent Profile Conflicts & Resolutions
+  if (inputIntentProfile) {
+    if (inputIntentProfile.conflicts && inputIntentProfile.conflicts.length > 0) {
+      // If there are conflicts detected
+      inputIntentProfile.conflicts.forEach(conflict => {
+        reasons.push(`Phát hiện xung đột ý định: ${conflict} (Đã xử lý theo thứ tự ưu tiên V4.5)`);
+      });
+      // If the conflict was automatically resolved and respected in final prompt
+      if (inputIntentProfile.conflictResolutions && inputIntentProfile.conflictResolutions.length > 0) {
+        score += 2;
+        reasons.push('Xung đột ý định đã được giải quyết tất định theo quy tắc ưu tiên');
+      }
+    } else {
+      score += 3;
+      reasons.push('Ý định âm nhạc (Intent Profile) nhất quán, không có xung đột');
+    }
+  }
+
+  // Blueprint Completeness Reward
+  if (blueprint.confidence >= 0.75) {
+    score += 5;
+    reasons.push(`Music Blueprint đạt độ tin cậy cao (${Math.round(blueprint.confidence * 100)}%)`);
   }
 
   // Clamp score between 0 and 100
@@ -612,3 +771,4 @@ export const evaluatePromptHealth = (
     reasons,
   };
 };
+
