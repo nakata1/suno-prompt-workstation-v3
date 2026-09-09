@@ -2,7 +2,14 @@
 // Logic ported from original JS and typed
 import { CategoryKey } from './types';
 import { genres, instruments, moods, vocals, structure, effects, production, v5Advanced, mixingPresets, animeDrama, v5Performance } from './data';
-import { derivePrimaryIntent, validateSelectionsWithIntent, PrimaryIntent } from './semanticValidator';
+import {
+  derivePrimaryIntent,
+  validateSelectionsWithIntent,
+  PrimaryIntent,
+  buildUserIntentProfile,
+  applyQualityEngine,
+  isTagExcluded,
+} from './semanticValidator';
 
 // Helper to convert File to Base64 for Gemini API
 const fileToBase64 = (file: File): Promise<string> => {
@@ -169,28 +176,52 @@ export const analyzeImageSim = async (file: File): Promise<{ topic: string; tags
 };
 
 export const optimizePromptSim = (input: string): string => {
-  const lower = input.toLowerCase();
-  if (lower.includes('sad') || lower.includes('mưa') || lower.includes('buồn') || lower.includes('khóc')) {
-    return "A melancholic and somber piano ballad, evoking feelings of a rainy day, with soft strings and a gentle, breathy female vocal, Lo-Fi production.";
+  const profile = buildUserIntentProfile(input);
+  const positiveLower = profile.exclusions.positiveText.toLowerCase();
+
+  // Vocal character based on user intent profile
+  let vocalDesc = 'expressive vocals';
+  if (profile.isInstrumental) {
+    vocalDesc = 'instrumental without lead vocals';
+  } else if (profile.vocalGender === 'male') {
+    const tex = profile.vocalTexture.length ? profile.vocalTexture.join(' ') : 'warm mature';
+    vocalDesc = `${tex} male vocal`;
+  } else if (profile.vocalGender === 'female') {
+    const tex = profile.vocalTexture.length ? profile.vocalTexture.join(' ') : 'clear emotive';
+    vocalDesc = `${tex} female vocal`;
+  } else if (profile.vocalGender === 'choir') {
+    vocalDesc = 'soaring harmonic choir';
   }
-  if (lower.includes('epic') || lower.includes('chiến') || lower.includes('hùng tráng') || lower.includes('sử thi')) {
+
+  // Vietnamese Acoustic Ballad
+  if ((profile.culturalStyle === 'vietnamese' || positiveLower.includes('việt nam') || positiveLower.includes('v-pop') || positiveLower.includes('tình ca')) && (profile.isAcoustic || positiveLower.includes('ballad') || positiveLower.includes('mộc'))) {
+    const instStr = profile.explicitInstruments.length > 0 ? profile.explicitInstruments.join(', ') : 'piano and acoustic guitar';
+    return `An intimate Vietnamese acoustic ballad about memories on a rainy day, featuring gentle ${instStr}, warm strings at the climax, and heartfelt ${vocalDesc}.`;
+  }
+
+  if (positiveLower.includes('sad') || positiveLower.includes('mưa') || positiveLower.includes('buồn') || positiveLower.includes('khóc')) {
+    const prodDesc = profile.exclusions.excludeLofi ? 'organic acoustic production' : 'warm acoustic production';
+    return `A melancholic and somber piano ballad, evoking feelings of a rainy day, with soft strings, ${prodDesc}, and ${vocalDesc}.`;
+  }
+  if (!profile.exclusions.excludeMetal && (positiveLower.includes('epic') || positiveLower.includes('chiến') || positiveLower.includes('hùng tráng') || positiveLower.includes('sử thi'))) {
     return "An epic, soaring orchestral soundtrack for a cinematic battle scene, powerful timpani, dramatic choir, and a rising crescendo, studio quality.";
   }
-  if (lower.includes('happy') || lower.includes('vui') || lower.includes('hạnh phúc') || lower.includes('cười')) {
-    return "An upbeat, energetic and happy J-Pop song, fast tempo, with bright synthesizers, electric guitar, and a clear, high-pitched female vocal, 1990s style.";
+  if (!profile.exclusions.excludePop && (positiveLower.includes('happy') || positiveLower.includes('vui') || positiveLower.includes('hạnh phúc') || positiveLower.includes('cười'))) {
+    return `An upbeat, energetic and happy pop song, fast tempo, with bright acoustic and electric textures, and ${vocalDesc}.`;
   }
-  if (lower.includes('cyber') || lower.includes('tương lai') || lower.includes('future') || lower.includes('máy móc')) {
-    return "Dark, futuristic synthwave, 1980s style, with pulsing analog synths, arpeggiators, and a driving drum machine rhythm, vocoder vocals.";
+  if (!profile.exclusions.excludeSynthwave && !profile.exclusions.excludeRetro && (positiveLower.includes('cyber') || positiveLower.includes('tương lai') || positiveLower.includes('future') || positiveLower.includes('máy móc'))) {
+    return "Dark, futuristic synthwave, 1980s style, with pulsing analog synths, arpeggiators, and a driving drum machine rhythm.";
   }
-  if (lower.includes('lofi') || lower.includes('học') || lower.includes('chill') || lower.includes('thư giãn')) {
+  if (!profile.exclusions.excludeLofi && (positiveLower.includes('lofi') || positiveLower.includes('học') || positiveLower.includes('chill') || positiveLower.includes('thư giãn'))) {
     return "A cozy, nostalgic Lo-Fi hip hop beat, perfect for studying, with mellow electric piano, soft drums, and vinyl crackle, instrumental.";
   }
-  return `A high-quality song about: ${input}, featuring rich instrumentation, studio production, and clear structure.`;
+  return `An evocative musical piece inspired by "${profile.exclusions.positiveText}", featuring expressive instrumentation, balanced dynamic progression, and cohesive production.`;
 };
 
 // Returns a list of tag keys found in the input string to simulate AI suggestion
 export const suggestTagsSim = (input: string): { category: CategoryKey, tag: string }[] => {
-  const inputLower = input.toLowerCase();
+  const profile = buildUserIntentProfile(input);
+  const inputLower = profile.exclusions.positiveText.toLowerCase();
   const suggestions: { category: CategoryKey, tag: string }[] = [];
 
   const checkAndPush = (map: any, category: CategoryKey) => {
@@ -199,14 +230,17 @@ export const suggestTagsSim = (input: string): { category: CategoryKey, tag: str
          if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
             // It's a nested category (e.g., 'Rock': {...})
             Object.keys(value as any).forEach(subKey => {
-                if (inputLower.includes(subKey.toLowerCase()) || inputLower.includes((value as any)[subKey].toLowerCase())) {
+                if (isTagExcluded(category, subKey, profile.exclusions)) return;
+                const subVal = (value as any)[subKey] || '';
+                if (inputLower.includes(subKey.toLowerCase()) || (typeof subVal === 'string' && inputLower.includes(subVal.toLowerCase()))) {
                     suggestions.push({ category, tag: subKey });
                 }
             });
          } else {
              // It's a flat map
+             if (isTagExcluded(category, key, profile.exclusions)) return;
              const label = value as string;
-             if (inputLower.includes(key.toLowerCase()) || inputLower.includes(label.toLowerCase())) {
+             if (inputLower.includes(key.toLowerCase()) || (typeof label === 'string' && inputLower.includes(label.toLowerCase()))) {
                  suggestions.push({ category, tag: key });
              }
          }
@@ -222,26 +256,54 @@ export const suggestTagsSim = (input: string): { category: CategoryKey, tag: str
   checkAndPush(mixingPresets, 'mixingPresets');
   checkAndPush(v5Performance, 'v5Performance');
 
-  // Hardcoded simple associations for simulation
-  if (inputLower.includes('buồn') || inputLower.includes('sad')) {
-      suggestions.push({category: 'moods', tag: 'Sad'});
-      suggestions.push({category: 'instruments', tag: 'Piano'});
-      suggestions.push({category: 'v5Performance', tag: 'Expressive'});
-  }
-  if (inputLower.includes('rock') || inputLower.includes('mạnh')) {
-      suggestions.push({category: 'genres', tag: 'Rock'});
-      suggestions.push({category: 'instruments', tag: 'Electric Guitar'});
-      suggestions.push({category: 'instruments', tag: 'Drum Kit'});
-      suggestions.push({category: 'v5Performance', tag: 'Dynamic'});
-  }
-   if (inputLower.includes('điện tử') || inputLower.includes('edm')) {
-      suggestions.push({category: 'genres', tag: 'EDM'});
-      suggestions.push({category: 'instruments', tag: 'Synthesizer'});
-      suggestions.push({category: 'v5Performance', tag: 'Wide Stereo'});
+  // Explicit instruments from intent profile
+  profile.explicitInstruments.forEach(inst => {
+    if (!isTagExcluded('instruments', inst, profile.exclusions)) {
+      suggestions.push({ category: 'instruments', tag: inst });
+    }
+  });
+
+  // Emotional associations based strictly on positive text
+  if (inputLower.includes('buồn') || inputLower.includes('sad') || inputLower.includes('nhớ') || inputLower.includes('mưa')) {
+      if (!isTagExcluded('moods', 'Sad', profile.exclusions)) suggestions.push({ category: 'moods', tag: 'Sad' });
+      if (!isTagExcluded('moods', 'Melancholic', profile.exclusions)) suggestions.push({ category: 'moods', tag: 'Melancholic' });
+      if (!isTagExcluded('moods', 'Nostalgic', profile.exclusions)) suggestions.push({ category: 'moods', tag: 'Nostalgic' });
+      if (!isTagExcluded('instruments', 'Piano', profile.exclusions)) suggestions.push({ category: 'instruments', tag: 'Piano' });
+      if (!isTagExcluded('v5Performance', 'Expressive', profile.exclusions)) suggestions.push({ category: 'v5Performance', tag: 'Expressive' });
+      if (!isTagExcluded('v5Performance', 'Intimate', profile.exclusions)) suggestions.push({ category: 'v5Performance', tag: 'Intimate' });
   }
 
-  // Deduplicate
-  return suggestions.filter((v, i, a) => a.findIndex(t => t.category === v.category && t.tag === v.tag) === i);
+  // Acoustic / Ballad associations on positive text
+  if (profile.isAcoustic || inputLower.includes('ballad') || inputLower.includes('mộc') || inputLower.includes('acoustic')) {
+      if (!isTagExcluded('genres', 'Acoustic', profile.exclusions)) suggestions.push({ category: 'genres', tag: 'Acoustic' });
+      if (!isTagExcluded('genres', 'Pop', profile.exclusions)) suggestions.push({ category: 'genres', tag: 'Pop' });
+      if (!isTagExcluded('instruments', 'Acoustic Guitar', profile.exclusions)) suggestions.push({ category: 'instruments', tag: 'Acoustic Guitar' });
+  }
+
+  // Rock associations (only if Rock/Metal are NOT excluded)
+  if (!profile.exclusions.excludeRock && !profile.exclusions.excludeMetal) {
+    if (inputLower.includes('rock') || (inputLower.includes('mạnh') && !profile.isAcoustic)) {
+        if (!isTagExcluded('genres', 'Rock', profile.exclusions)) suggestions.push({ category: 'genres', tag: 'Rock' });
+        if (!isTagExcluded('instruments', 'Electric Guitar', profile.exclusions)) suggestions.push({ category: 'instruments', tag: 'Electric Guitar' });
+        if (!isTagExcluded('instruments', 'Drum Kit', profile.exclusions)) suggestions.push({ category: 'instruments', tag: 'Drum Kit' });
+        if (!isTagExcluded('v5Performance', 'Dynamic', profile.exclusions)) suggestions.push({ category: 'v5Performance', tag: 'Dynamic' });
+    }
+  }
+
+  // EDM associations (only if EDM is NOT excluded)
+  if (!profile.exclusions.excludeEdm) {
+     if (inputLower.includes('điện tử') || inputLower.includes('edm') || inputLower.includes('dance')) {
+        if (!isTagExcluded('genres', 'EDM', profile.exclusions)) suggestions.push({ category: 'genres', tag: 'EDM' });
+        if (!isTagExcluded('instruments', 'Synthesizer', profile.exclusions)) suggestions.push({ category: 'instruments', tag: 'Synthesizer' });
+        if (!isTagExcluded('v5Performance', 'Wide Stereo', profile.exclusions)) suggestions.push({ category: 'v5Performance', tag: 'Wide Stereo' });
+    }
+  }
+
+  // Deduplicate and filter out any excluded tags
+  return suggestions.filter((v, i, a) => {
+    if (isTagExcluded(v.category, v.tag, profile.exclusions)) return false;
+    return a.findIndex(t => t.category === v.category && t.tag === v.tag) === i;
+  });
 };
 
 export const generatePromptSim = async (input: string): Promise<string> => {
@@ -383,20 +445,28 @@ const sanitizeDirectorSelections = (raw: any): Partial<Record<CategoryKey, strin
 };
 
 const musicDirectorFallback = (input: string, isOverloaded: boolean = false): MusicDirectorResult => {
+  const profile = buildUserIntentProfile(input);
   const base = suggestTagsSim(input);
   const selections: Partial<Record<CategoryKey, string[]>> = {};
   base.forEach(({category, tag}) => {
-    selections[category] = Array.from(new Set([...(selections[category] || []), tag]));
+    if (!isTagExcluded(category, tag, profile.exclusions)) {
+      selections[category] = Array.from(new Set([...(selections[category] || []), tag]));
+    }
   });
 
-  const hay = input.toLowerCase();
+  const positiveHay = profile.exclusions.positiveText.toLowerCase();
   const addFirstAvailable = (category: CategoryKey, candidates: string[]) => {
     const allowed = new Set(allowedTags[category]);
-    const hit = candidates.find(x => allowed.has(x));
-    if (hit && !(selections[category] || []).includes(hit)) selections[category] = [...(selections[category] || []), hit];
+    const hit = candidates.find(x => allowed.has(x) && !isTagExcluded(category, x, profile.exclusions));
+    if (hit && !(selections[category] || []).includes(hit)) {
+      selections[category] = [...(selections[category] || []), hit];
+    }
   };
 
-  const mythicMetal = /viking|bắc âu|nordic|rồng|dragon|thần sấm|thunder|valhalla|chiến binh/.test(hay) && /metal|rock|chiến|battle|war|sử thi|epic/.test(hay);
+  // 1. Nordic Mythic Metal Preset (Strictly guarded against metal exclusion)
+  const mythicMetal = !profile.exclusions.excludeMetal &&
+    /viking|bắc âu|nordic|rồng|dragon|thần sấm|thunder|valhalla|chiến binh/.test(positiveHay) &&
+    /metal|rock|chiến|battle|war|sử thi|epic/.test(positiveHay);
 
   if (mythicMetal) {
     addFirstAvailable('genres', ['Folk Metal', 'Symphonic Metal', 'Heavy Metal', 'Cinematic']);
@@ -404,27 +474,50 @@ const musicDirectorFallback = (input: string, isOverloaded: boolean = false): Mu
     addFirstAvailable('instruments', ['Electric Guitar', 'Drum Kit', 'Choir', 'Timpani', 'Strings']);
     addFirstAvailable('vocals', ['Male Vocal', 'Choir']);
     addFirstAvailable('v5Performance', ['Dynamic', 'Expressive']);
-  } else if (/buồn|sad|chia tay|mưa|nhớ|cô đơn/.test(hay)) {
-    addFirstAvailable('moods', ['Sad', 'Melancholic', 'Emotional']);
-    addFirstAvailable('instruments', ['Piano', 'Acoustic Guitar']);
-    addFirstAvailable('v5Performance', ['Expressive', 'Intimate']);
-  } else if (/epic|sử thi|chiến|battle|cinematic|war/.test(hay)) {
+  }
+  // 2. Vietnamese Acoustic Ballad & Intimate Ballad Preset (Guarded against acoustic exclusion)
+  else if (!profile.exclusions.excludeAcoustic && (profile.culturalStyle === 'vietnamese' || profile.isAcoustic || /v-pop|acoustic|ballad|tình ca|mưa|nhớ|buồn|cô đơn/i.test(positiveHay))) {
+    addFirstAvailable('genres', ['Acoustic', 'Pop']);
+    addFirstAvailable('moods', ['Nostalgic', 'Melancholic', 'Heartfelt', 'Warm', 'Sad']);
+    addFirstAvailable('instruments', ['Piano', 'Acoustic Guitar', 'String Section']);
+    if (profile.vocalGender === 'male') {
+      addFirstAvailable('vocals', ['Male Vocal', 'Soulful Singing']);
+    } else if (profile.vocalGender === 'female') {
+      addFirstAvailable('vocals', ['Female Vocal', 'Airy Vocal']);
+    } else {
+      addFirstAvailable('vocals', ['Male Vocal', 'Female Vocal']);
+    }
+    addFirstAvailable('v5Performance', ['Intimate', 'Expressive']);
+    addFirstAvailable('production', ['Acoustic', 'Organic']);
+  }
+  // 3. Cinematic Battle / Epic Score (Guarded against heavy / metal exclusions)
+  else if (!profile.exclusions.excludeMetal && /epic|sử thi|chiến|battle|cinematic|war/.test(positiveHay)) {
     addFirstAvailable('genres', ['Cinematic', 'Orchestral', 'Symphonic Metal']);
     addFirstAvailable('moods', ['Epic', 'Dark', 'Energetic']);
     addFirstAvailable('instruments', ['Strings', 'Choir', 'Timpani']);
     addFirstAvailable('v5Performance', ['Dynamic', 'Expressive']);
-  } else if (/dance|edm|club|sôi động|tiệc/.test(hay)) {
+  }
+  // 4. EDM / Dance (Guarded against EDM exclusion)
+  else if (!profile.exclusions.excludeEdm && /dance|edm|club|sôi động|tiệc/.test(positiveHay)) {
     addFirstAvailable('genres', ['EDM', 'Dance Pop']);
     addFirstAvailable('instruments', ['Synthesizer', 'Drum Machine']);
     addFirstAvailable('moods', ['Energetic', 'Uplifting']);
+  }
+  // 5. Lo-Fi (Guarded against Lo-Fi exclusion)
+  else if (!profile.exclusions.excludeLofi && (profile.isLofi || /lo-fi|lofi|chillhop/.test(positiveHay))) {
+    addFirstAvailable('genres', ['Lo-Fi Hip Hop']);
+    addFirstAvailable('moods', ['Chill', 'Relaxed', 'Nostalgic']);
+    addFirstAvailable('instruments', ['Piano', 'Drum Machine']);
+    addFirstAvailable('production', ['Lo-Fi', 'Vinyl Crackle']);
   }
 
   addFirstAvailable('structure', ['Verse-Chorus', 'Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus-Outro']);
   const confidence = mythicMetal ? 0.78 : (Object.keys(selections).length >= 3 ? 0.72 : 0.58);
   const cd = optimizePromptSim(input);
   const rawClean = sanitizeDirectorSelections(selections);
-  const intent = derivePrimaryIntent(input, cd, rawClean);
-  const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent);
+  const intent = derivePrimaryIntent(input, cd, rawClean, profile);
+  const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent, profile);
+  const { selections: finalSelections } = applyQualityEngine(validatedSelections, intent, profile);
 
   const fallbackReason: 'overload' | 'unavailable' = isOverloaded ? 'overload' : 'unavailable';
   const rationale = isOverloaded
@@ -433,7 +526,7 @@ const musicDirectorFallback = (input: string, isOverloaded: boolean = false): Mu
 
   return {
     creativeDirection: cd,
-    selections: validatedSelections,
+    selections: finalSelections,
     rationale,
     confidence,
     engine: 'local',
@@ -450,17 +543,23 @@ export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorRe
     const res = await safeFetchGeminiApi<any>('/api/gemini/music-director', { input, catalog });
     if (res.ok && res.data) {
       const parsed = res.data;
+      const profile = buildUserIntentProfile(input);
       const creativeDirection = typeof parsed.creativeDirection === 'string' && parsed.creativeDirection.trim()
         ? parsed.creativeDirection.trim()
         : optimizePromptSim(input);
       const rawClean = sanitizeDirectorSelections(parsed.selections);
-      const intent = derivePrimaryIntent(input, creativeDirection, rawClean);
-      const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent);
+      // Clean exclusions for Gemini results to guarantee strict parity
+      (Object.keys(rawClean) as CategoryKey[]).forEach(cat => {
+        rawClean[cat] = (rawClean[cat] || []).filter(t => !isTagExcluded(cat, t, profile.exclusions));
+      });
+      const intent = derivePrimaryIntent(input, creativeDirection, rawClean, profile);
+      const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent, profile);
+      const { selections: finalSelections } = applyQualityEngine(validatedSelections, intent, profile);
       const rationale = typeof parsed.rationale === 'string' ? parsed.rationale.trim() : 'Đã chọn bộ thẻ cân bằng cho ý tưởng này.';
       const confidence = Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.8)));
       return {
         creativeDirection,
-        selections: validatedSelections,
+        selections: finalSelections,
         rationale,
         confidence,
         engine: 'gemini',

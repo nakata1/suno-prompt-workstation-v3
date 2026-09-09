@@ -1,5 +1,6 @@
 import { SelectionState } from './types';
 import { derivePrimaryIntent } from './semanticValidator';
+import { buildUserIntentProfile } from './musicQualityEngine';
 
 export type SunoModelProfile = 'auto' | 'v5.5';
 
@@ -16,8 +17,8 @@ const clean = (value: string) => value.replace(/\s+/g, ' ').replace(/\s*,\s*/g, 
 const unique = (items: string[]) => Array.from(new Set(items.map(clean).filter(Boolean)));
 const join = (items: string[]) => unique(items).join(', ');
 
-const inferTempo = (s: SelectionState, idea: string): string => {
-  const hay = `${idea} ${s.structure.join(' ')} ${s.moods.join(' ')}`.toLowerCase();
+const inferTempo = (s: SelectionState, idea: string, positiveText?: string): string => {
+  const hay = `${positiveText || idea} ${s.structure.join(' ')} ${s.moods.join(' ')}`.toLowerCase();
   if (/fast|upbeat|energetic|dance|edm|drum and bass|rock|nhanh|sôi động/.test(hay)) return 'up-tempo, driving rhythmic pulse';
   if (/slow|sad|melanch|ballad|romantic|buồn|chậm|trữ tình/.test(hay)) return 'slow to mid-tempo, spacious emotional pulse';
   return 'moderate tempo with natural, organic rhythmic movement';
@@ -25,7 +26,7 @@ const inferTempo = (s: SelectionState, idea: string): string => {
 
 const inferArc = (s: SelectionState): string => {
   if (s.structure.length) return `clear song form with ${join(s.structure).toLowerCase()}`;
-  return 'clear verse-to-chorus progression, memorable melodic hook, and dynamic dynamic lift into the final section';
+  return 'clear verse-to-chorus progression, memorable melodic hook, and dynamic lift into the climax';
 };
 
 export const composeSunoStylePrompt = (
@@ -34,55 +35,71 @@ export const composeSunoStylePrompt = (
   selections: SelectionState,
   modelProfile: SunoModelProfile = 'auto'
 ): string => {
-  const concept = clean(optimizedIdea || idea);
-  const intent = derivePrimaryIntent(idea, optimizedIdea, selections);
+  const profile = buildUserIntentProfile(idea);
+  const intent = derivePrimaryIntent(idea, optimizedIdea, selections, profile);
 
   const sentences: string[] = [];
 
-  // 1. Dominant genre / musical identity with natural musical direction
+  // 1. Dominant genre & Primary Intent Opening Sentence
   const article = /^[aeiou]/i.test(intent.descriptor) ? 'an' : 'a';
-  const openingAtmosphere = intent.atmosphere ? ` with ${intent.atmosphere}` : '';
-  sentences.push(`Create ${article} ${intent.descriptor}${openingAtmosphere}`.trim());
+  let opening = `Create ${article} ${intent.descriptor}`;
+  if (profile.explicitArrangement.length > 0 && profile.explicitInstruments.length > 0) {
+    const arrText = profile.explicitArrangement.join(', ');
+    const instText = profile.explicitInstruments.slice(0, 3).join(', ');
+    opening += ` with ${arrText} driven by ${instText.toLowerCase()}`;
+  } else if (intent.atmosphere) {
+    opening += ` with ${intent.atmosphere}`;
+  }
+  sentences.push(opening.trim());
 
-  // 2. Emotional atmosphere (filter out words already prominent in the opening)
+  // 2. Emotional tone & mood nuances (excluding words already prominent in the opening)
   const openingLower = sentences[0].toLowerCase();
   const remainingMoods = selections.moods.filter(m => !openingLower.includes(m.toLowerCase()));
   if (remainingMoods.length) {
     sentences.push(`Emotional tone: ${unique(remainingMoods).join(', ')}`);
   }
 
-  // Core concept if distinct from musical direction
-  if (concept && !sentences[0].toLowerCase().includes(concept.toLowerCase())) {
-    sentences.push(`Core narrative: ${concept}`);
-  }
-
   // 3. Instrumentation
   if (selections.instruments.length) {
     const instList = unique(selections.instruments).join(', ');
-    sentences.push(`Instrumentation: ${instList}, arranged with acoustic balance and clear separation`);
+    sentences.push(`Instrumentation: ${instList}, arranged with dynamic balance and spatial clarity`);
   }
 
-  // 4. Vocal character
-  if (selections.vocals.length) {
-    const vocalList = unique(selections.vocals).join(', ');
-    sentences.push(`Vocal character: ${vocalList}, natural phrasing with emotionally believable delivery`);
+  // 4. Vocal Character (Vocal Fidelity Lock)
+  if (profile.isInstrumental || selections.structure.includes('Instrumental')) {
+    sentences.push('Instrumental composition without lead vocals, emphasizing expressive melodic phrasing');
+  } else if (selections.vocals.length) {
+    if (profile.vocalGender === 'male') {
+      const textures = profile.vocalTexture.length ? profile.vocalTexture.join(' ') : 'warm mature';
+      sentences.push(`Vocal character: ${textures} male vocal, natural phrasing with heartfelt delivery`);
+    } else if (profile.vocalGender === 'female') {
+      const textures = profile.vocalTexture.length ? profile.vocalTexture.join(' ') : 'airy';
+      sentences.push(`Vocal character: ${textures} female vocal hooks, clear phrasing with emotional nuance`);
+    } else if (profile.vocalGender === 'choir') {
+      sentences.push('Vocal character: soaring choir with harmonic grandeur and commanding resonance');
+    } else {
+      const vocalList = unique(selections.vocals).join(', ');
+      sentences.push(`Vocal character: ${vocalList}, natural phrasing with emotionally believable delivery`);
+    }
   }
 
-  // 5. Rhythm / pacing
-  sentences.push(`Rhythm and pacing: ${inferTempo(selections, concept)}`);
+  // 5. Rhythm and pacing
+  sentences.push(`Rhythm and pacing: ${inferTempo(selections, idea, profile.exclusions.positiveText)}`);
 
   // 6. Arrangement arc
   sentences.push(`Arrangement arc: ${inferArc(selections)}`);
 
-  // 7. Production character
-  const prodElements = unique([
+  // 7. Production aesthetic
+  const rawProd = [
     ...selections.production,
     ...selections.mixingPresets,
     ...selections.v5Performance,
     ...selections.effects
-  ]);
+  ];
+  // Filter out generic buzzwords
+  const prodElements = unique(rawProd.filter(p => !/studio quality|masterpiece|high-fidelity/i.test(p)));
   if (prodElements.length) {
-    sentences.push(`Production character: ${prodElements.join(', ')}, balanced stereo imaging, controlled dynamics, and clean master presence`);
+    sentences.push(`Production aesthetic: ${prodElements.join(', ')}, wide stereo imaging, and natural frequency response`);
   }
 
   // Stylistic nuances (Anime/Drama, V5 Advanced)
@@ -91,7 +108,15 @@ export const composeSunoStylePrompt = (
     sentences.push(`Stylistic nuances: ${specialElements.join(', ')}`);
   }
 
-  // Current Suno generations respond well to detailed natural-language style instructions.
+  // 8. Core thematic focus (sanitized, avoiding generic template phrases and language leakage)
+  const rawConcept = clean(optimizedIdea || idea);
+  const isVietnameseRaw = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(rawConcept);
+  const isGenericFluff = /a high-quality song about|core narrative|studio production|rich instrumentation/i.test(rawConcept);
+  if (rawConcept && !isVietnameseRaw && !isGenericFluff && !sentences[0].toLowerCase().includes(rawConcept.toLowerCase())) {
+    sentences.push(`Core theme: ${rawConcept}`);
+  }
+
+  // Directional priority for Suno
   if (modelProfile === 'v5.5') {
     sentences.push('Prioritize expressive vocals, rich arrangement detail, strong prompt adherence, and natural musical transitions');
   } else {
@@ -106,10 +131,11 @@ export const recommendSunoSettings = (
   selections: SelectionState,
   modelProfile: SunoModelProfile = 'auto'
 ): SunoSettingsRecommendation => {
-  const hay = `${idea} ${Object.values(selections).flat().join(' ')}`.toLowerCase();
-  const experimental = /experimental|avant|glitch|noise|hyperpop|breakcore|abstract|psychedelic|thực nghiệm/.test(hay);
-  const strict = /ballad|classical|orchestral|bolero|folk|acoustic|worship|trữ tình|dân ca/.test(hay);
-  const energetic = /edm|dance|rock|metal|drum and bass|fast|energetic|sôi động/.test(hay);
+  const profile = buildUserIntentProfile(idea);
+  const positiveHay = `${profile.exclusions.positiveText} ${Object.values(selections).flat().join(' ')}`.toLowerCase();
+  const experimental = /experimental|avant|glitch|noise|hyperpop|breakcore|abstract|psychedelic|thực nghiệm/.test(positiveHay);
+  const strict = /ballad|classical|orchestral|bolero|folk|acoustic|worship|trữ tình|dân ca/.test(positiveHay);
+  const energetic = /edm|dance|rock|metal|drum and bass|fast|energetic|sôi động/.test(positiveHay);
 
   let weirdness = experimental ? 68 : strict ? 32 : 45;
   let styleInfluence = experimental ? 66 : strict ? 82 : 74;
@@ -117,14 +143,27 @@ export const recommendSunoSettings = (
   if (selections.v5Advanced.length >= 3) weirdness = Math.min(65, weirdness + 8);
 
   let durationMinutes = 3.5;
-  if (/epic|cinematic|progressive|symphony|opera|sử thi/.test(hay)) durationMinutes = 4.5;
-  if (/short|jingle|intro|tiktok|ngắn/.test(hay)) durationMinutes = 2.0;
+  if (/epic|cinematic|progressive|symphony|opera|sử thi/.test(positiveHay)) durationMinutes = 4.5;
+  if (/short|jingle|intro|tiktok|ngắn/.test(positiveHay)) durationMinutes = 2.0;
   if (energetic && durationMinutes === 3.5) durationMinutes = 3.25;
 
   const exclude: string[] = [];
-  if (/acoustic|folk|ballad|bolero|piano/.test(hay)) exclude.push('harsh distortion', 'overly busy drums');
-  if (/cinematic|orchestral|classical/.test(hay)) exclude.push('cheap synth presets');
-  if (/lo-fi|lofi/.test(hay)) exclude.push('over-polished mastering');
+
+  // Direct transfer of explicit user-negated terms into Suno Exclude Styles setting
+  if (profile.exclusions.excludedKeywords.length > 0) {
+    exclude.push(...profile.exclusions.excludedKeywords);
+  }
+
+  if (/acoustic|folk|ballad|bolero|piano/.test(positiveHay)) {
+    if (!exclude.includes('harsh distortion')) exclude.push('harsh distortion');
+    if (!exclude.includes('overly busy drums')) exclude.push('overly busy drums');
+  }
+  if (/cinematic|orchestral|classical/.test(positiveHay)) {
+    if (!exclude.includes('cheap synth presets')) exclude.push('cheap synth presets');
+  }
+  if (/lo-fi|lofi/.test(positiveHay) && !profile.exclusions.excludeLofi) {
+    if (!exclude.includes('over-polished mastering')) exclude.push('over-polished mastering');
+  }
 
   return {
     model: modelProfile === 'v5.5' ? 'v5.5' : 'Latest / Auto',

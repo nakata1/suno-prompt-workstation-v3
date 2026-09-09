@@ -186,10 +186,11 @@ FIRST understand the full musical intent before selecting any tags. Infer only w
 THEN rank catalog tags by semantic fit. Select only tags that materially reinforce the SAME concept. Never choose a tag merely because one adjective or keyword overlaps. Avoid contradictory genre, mood, vocal, instrument, production and performance choices.
 
 SELECTION RULES:
+- CRITICAL EXCLUSION RULE: If the user explicitly excludes or negates any genre, style, instrument, vocal, or production element (e.g., using "không", "tránh", "loại bỏ", "no", "without", "avoid", "exclude", e.g., "không EDM, không metal, không Lo-Fi"), you MUST STRICTLY EXCLUDE those tags and any related subgenres/elements from selections!
 - Prefer 1-2 genres, 1-3 moods, 2-5 instruments, 0-2 vocals, 1-2 structure tags.
 - Keep production/performance/effects sparse and useful.
 - If the catalog lacks an accurate tag, leave that category sparse or empty rather than choosing a misleading substitute.
-- For mythic war / Viking / Nordic / dragon / thunder / heroic battle concepts, when available, strongly prefer semantically related epic, folk, metal, symphonic, cinematic, martial, dark/powerful, choir, war-drum, distorted-guitar, orchestral-percussion or Nordic-folk tags over unrelated sad/romantic tags.
+- For mythic war / Viking / Nordic / dragon / thunder / heroic battle concepts, when available and NOT excluded, strongly prefer semantically related epic, folk, metal, symphonic, cinematic, martial, dark/powerful, choir, war-drum, distorted-guitar, orchestral-percussion or Nordic-folk tags over unrelated sad/romantic tags.
 - For intimate grief / rain / longing concepts, prefer restrained, melancholic, warm, acoustic, expressive choices over unnecessarily epic or aggressive ones.
 - Never force a vocal choice if the idea does not imply one.
 

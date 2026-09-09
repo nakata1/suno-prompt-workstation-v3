@@ -1,4 +1,15 @@
 import { CategoryKey, SelectionState } from './types';
+import {
+  buildUserIntentProfile,
+  applyQualityEngine,
+  UserIntentProfile,
+  hasExplicitSupport,
+  isTagExcluded,
+  extractExclusions,
+} from './musicQualityEngine';
+
+export { buildUserIntentProfile, applyQualityEngine, hasExplicitSupport, isTagExcluded, extractExclusions };
+export type { UserIntentProfile };
 
 export type IntentProfile =
   | 'metal_epic'
@@ -62,29 +73,39 @@ export const createEmptySelections = (): SelectionState => ({
 /**
  * Primary Intent Lock:
  * Derives a concise, dominant Primary Musical Intent from the user idea,
- * creative direction, and initial AI selections.
+ * creative direction, initial AI selections, and deterministic User Intent Profile.
  */
 export const derivePrimaryIntent = (
   idea: string,
   creativeDirection: string,
-  selections: Partial<Record<CategoryKey, string[]>>
+  selections: Partial<Record<CategoryKey, string[]>>,
+  inputProfile?: UserIntentProfile
 ): PrimaryIntent => {
-  const g = (selections.genres || []).join(' ');
-  const m = (selections.moods || []).join(' ');
-  const inst = (selections.instruments || []).join(' ');
-  const v = (selections.vocals || []).join(' ');
+  const profile = inputProfile || buildUserIntentProfile(idea);
 
-  const text = `${idea} ${creativeDirection} ${g} ${m} ${inst} ${v}`.toLowerCase();
+  // Clean selections: filter out any tags that violate user exclusions before intent derivation
+  const cleanGenres = (selections.genres || []).filter(g => !isTagExcluded('genres', g, profile.exclusions));
+  const cleanMoods = (selections.moods || []).filter(m => !isTagExcluded('moods', m, profile.exclusions));
+  const cleanInst = (selections.instruments || []).filter(i => !isTagExcluded('instruments', i, profile.exclusions));
+  const cleanVocals = (selections.vocals || []).filter(v => !isTagExcluded('vocals', v, profile.exclusions));
+
+  const g = cleanGenres.join(' ');
+  const m = cleanMoods.join(' ');
+  const inst = cleanInst.join(' ');
+  const v = cleanVocals.join(' ');
+
+  // CRITICAL: use profile.exclusions.positiveText instead of raw idea so negated keywords NEVER contribute positive score!
+  const text = `${profile.exclusions.positiveText} ${creativeDirection} ${g} ${m} ${inst} ${v}`.toLowerCase();
 
   // 1. Nordic / Viking / Symphonic / Folk Metal
-  const isNordicMythic = /viking|bắc âu|nordic|valhalla|dragon|rồng|thần sấm|thor|odin|battle|chiến binh/.test(text);
-  const isMetal = /folk metal|symphonic metal|heavy metal|power metal|death metal|black metal|thrash metal|metalcore|metal/.test(text);
+  const isNordicMythic = profile.culturalStyle === 'nordic' || /viking|bắc âu|nordic|valhalla|dragon|rồng|thần sấm|thor|odin|battle|chiến binh/.test(text);
+  const isMetal = !profile.exclusions.excludeMetal && (profile.isMetalOrHeavy || /folk metal|symphonic metal|heavy metal|power metal|death metal|black metal|thrash metal|metalcore|metal/.test(text));
   if (isNordicMythic && isMetal) {
     return {
       label: 'Nordic symphonic folk metal',
       profile: 'metal_epic',
       descriptor: 'epic Nordic symphonic folk-metal track',
-      atmosphere: 'icy mythic atmosphere and heroic energy',
+      atmosphere: 'icy mythic atmosphere, thunderous war drums, heavy electric guitars, and heroic choir',
       isAcoustic: false,
       isIntimate: false,
       isHeavy: true,
@@ -97,7 +118,7 @@ export const derivePrimaryIntent = (
       label: isSymphonic ? 'Symphonic epic metal' : 'Heavy metal anthem',
       profile: 'metal_epic',
       descriptor: isSymphonic ? 'symphonic epic metal track' : 'hard-hitting heavy metal track',
-      atmosphere: 'dark, aggressive drive and soaring power',
+      atmosphere: 'dark, aggressive drive, soaring distorted guitars, and commanding power',
       isAcoustic: false,
       isIntimate: false,
       isHeavy: true,
@@ -106,14 +127,14 @@ export const derivePrimaryIntent = (
   }
 
   // 2. Cinematic Orchestral / Battle Score
-  const isCinematic = /cinematic|orchestral|symphony|trailer|soundtrack|nhạc phim|sử thi/.test(text);
+  const isCinematic = profile.isCinematic || /cinematic|orchestral|symphony|trailer|soundtrack|nhạc phim|sử thi/.test(text);
   const isBattle = /battle|war|chiến|epic|heroic/.test(text);
   if (isCinematic && isBattle) {
     return {
       label: 'Cinematic orchestral battle score',
       profile: 'cinematic_orchestral',
       descriptor: 'cinematic orchestral battle score',
-      atmosphere: 'tense, sweeping grandeur and martial intensity',
+      atmosphere: 'tense, sweeping grandeur, thundering percussion, and martial intensity',
       isAcoustic: false,
       isIntimate: false,
       isHeavy: true,
@@ -134,14 +155,14 @@ export const derivePrimaryIntent = (
   }
 
   // 3. Intimate Piano Singer-Songwriter Ballad
-  const hasPiano = /piano|grand piano|felt piano/.test(text);
-  const isSadIntimate = /buồn|sad|chia tay|mưa|cô đơn|intimate|melanchol|emotional|heartbroken|heartfelt/.test(text);
+  const hasPiano = profile.explicitInstruments.some(i => i.includes('Piano')) || /piano|grand piano|felt piano/.test(text);
+  const isSadIntimate = profile.energyLevel === 'intimate' || profile.energyLevel === 'calm' || /buồn|sad|chia tay|mưa|cô đơn|intimate|melanchol|emotional|heartbroken|heartfelt/.test(text);
   if (hasPiano && isSadIntimate && !/edm|dance|metal|rock|disco/.test(text)) {
     return {
       label: 'Intimate piano singer-songwriter ballad',
       profile: 'piano_ballad',
       descriptor: 'intimate piano singer-songwriter ballad',
-      atmosphere: 'delicate emotional warmth and tender vulnerability',
+      atmosphere: 'delicate piano phrasing, tender vulnerability, and heartfelt emotional intimacy',
       isAcoustic: true,
       isIntimate: true,
       isHeavy: false,
@@ -150,15 +171,15 @@ export const derivePrimaryIntent = (
   }
 
   // 4. Vietnamese Nostalgic Acoustic Ballad & General Acoustic Ballad
-  const isVietnameseNostalgic = /việt|vietnamese|nostalgic|hoài niệm|quê hương|bolero|v-pop|mưa phố|kỷ niệm/.test(text);
-  const isAcousticBallad = /acoustic|ballad|trữ tình|mộc|acoustic folk/.test(text);
+  const isVietnamese = profile.culturalStyle === 'vietnamese' || /việt|vietnamese|quê hương|bolero|v-pop/.test(text);
+  const isAcousticBallad = profile.isAcoustic || /acoustic|ballad|trữ tình|mộc|acoustic folk/.test(text);
   if (isAcousticBallad || isSadIntimate) {
-    if (isVietnameseNostalgic) {
+    if (isVietnamese) {
       return {
-        label: 'Vietnamese nostalgic acoustic ballad',
+        label: 'Vietnamese acoustic ballad',
         profile: 'acoustic_ballad',
-        descriptor: 'intimate Vietnamese nostalgic acoustic ballad',
-        atmosphere: 'wistful melancholic reflection and acoustic warmth',
+        descriptor: 'intimate Vietnamese acoustic ballad',
+        atmosphere: 'delicate acoustic resonance, lyrical warmth, and poignant emotional reflection',
         isAcoustic: true,
         isIntimate: true,
         isHeavy: false,
@@ -169,7 +190,7 @@ export const derivePrimaryIntent = (
       label: 'Acoustic singer-songwriter ballad',
       profile: 'acoustic_ballad',
       descriptor: 'gentle acoustic singer-songwriter ballad',
-      atmosphere: 'raw emotional intimacy and organic resonance',
+      atmosphere: 'raw emotional intimacy, warm guitar resonance, and heartfelt delivery',
       isAcoustic: true,
       isIntimate: true,
       isHeavy: false,
@@ -178,14 +199,15 @@ export const derivePrimaryIntent = (
   }
 
   // 5. Festival Future Bass EDM / Electronic Dance
-  const isEdm = /future bass|edm|festival|dance pop|drop|techno|house|dubstep|hardstyle|trance|electro swing/.test(text);
+  const isEdm = !profile.exclusions.excludeEdm && (profile.isElectronic || /future bass|edm|festival|dance pop|drop|techno|house|dubstep|hardstyle|trance|electro swing/.test(text));
   if (isEdm) {
-    const isFutureBass = /future bass|synthesizer|melodic/.test(text);
+    const isFutureBass = /future bass|supersaw|sub-bass/.test(text) || (profile.explicitInstruments.includes('Sawtooth Wave') && profile.explicitInstruments.includes('Sub-bass'));
+    const isModernFestival = profile.isModernExplicit || /festival|bùng nổ|drop/.test(text);
     return {
-      label: isFutureBass ? 'Festival future bass EDM' : 'High-energy electronic dance track',
+      label: isModernFestival ? 'Modern festival future-bass EDM' : isFutureBass ? 'Festival future bass EDM' : 'High-energy electronic dance track',
       profile: 'edm_electronic',
-      descriptor: isFutureBass ? 'festival future bass EDM track' : 'dynamic electronic club anthem',
-      atmosphere: 'euphoric synth energy, vibrant pulse, and massive build-ups',
+      descriptor: isModernFestival ? 'modern festival future-bass EDM track' : isFutureBass ? 'festival future-bass EDM track' : 'dynamic electronic club anthem',
+      atmosphere: 'escalating build-up, punchy percussion, and an explosive drop with wide supersaws',
       isAcoustic: false,
       isIntimate: false,
       isHeavy: false,
@@ -194,13 +216,13 @@ export const derivePrimaryIntent = (
   }
 
   // 6. Ambient / Meditative Soundscape
-  const isAmbient = /ambient|meditative|soundscape|drone|thiền|spa|healing|thư giãn|peaceful|relaxing/.test(text);
+  const isAmbient = profile.isAmbient || /ambient|meditative|soundscape|drone|thiền|spa|healing|thư giãn|peaceful|relaxing/.test(text);
   if (isAmbient) {
     return {
       label: 'Ambient meditative soundscape',
       profile: 'ambient_meditative',
       descriptor: 'serene ambient meditative soundscape',
-      atmosphere: 'tranquil, immersive stillness and floating harmonic layers',
+      atmosphere: 'tranquil stillness, spacious harmonic layers, and restorative sonic warmth',
       isAcoustic: true,
       isIntimate: true,
       isHeavy: false,
@@ -209,13 +231,13 @@ export const derivePrimaryIntent = (
   }
 
   // 7. Lo-Fi Chillhop
-  const isLofi = /lo-fi|lofi|chillhop|bedroom pop/.test(text);
+  const isLofi = !profile.exclusions.excludeLofi && (profile.isLofi || /lo-fi|lofi|chillhop|bedroom pop/.test(text));
   if (isLofi) {
     return {
       label: 'Lo-Fi chillhop groove',
       profile: 'lofi_chill',
       descriptor: 'cozy lo-fi chillhop beat',
-      atmosphere: 'warm vintage crackle, mellow chords, and laid-back swing',
+      atmosphere: 'warm vintage crackle, mellow electric piano chords, and a relaxed swing groove',
       isAcoustic: false,
       isIntimate: true,
       isHeavy: false,
@@ -224,13 +246,13 @@ export const derivePrimaryIntent = (
   }
 
   // 8. Rock / Punk
-  const isRock = /rock|punk|grunge|indie rock|hard rock/.test(text);
+  const isRock = !profile.exclusions.excludeRock && (profile.isRock || /rock|punk|grunge|indie rock|hard rock/.test(text));
   if (isRock) {
     return {
       label: 'Energetic alternative rock',
       profile: 'rock_energetic',
       descriptor: 'driving alternative rock anthem',
-      atmosphere: 'gritty guitar drive and punchy rhythm',
+      atmosphere: 'gritty guitar drive, punchy drum groove, and energetic momentum',
       isAcoustic: false,
       isIntimate: false,
       isHeavy: true,
@@ -239,13 +261,13 @@ export const derivePrimaryIntent = (
   }
 
   // 9. Hip-Hop / R&B
-  const isHipHop = /hip-hop|rap|trap|boom bap|r&b|neo-soul/.test(text);
+  const isHipHop = !profile.exclusions.excludeHipHop && (profile.isHipHop || /hip-hop|rap|trap|boom bap|r&b|neo-soul/.test(text));
   if (isHipHop) {
     return {
       label: 'Modern urban hip-hop',
       profile: 'hiphop_urban',
       descriptor: 'modern urban groove',
-      atmosphere: 'tight pocket rhythm and expressive swagger',
+      atmosphere: 'tight pocket rhythm, clean 808 foundation, and expressive swagger',
       isAcoustic: false,
       isIntimate: false,
       isHeavy: false,
@@ -254,13 +276,13 @@ export const derivePrimaryIntent = (
   }
 
   // 10. Traditional Folk / World
-  const isFolk = /folk|celtic|traditional|guzheng|dizi|đàn bầu|đàn tranh/.test(text);
+  const isFolk = profile.isFolk || /folk|celtic|traditional|guzheng|dizi|đàn bầu|đàn tranh/.test(text);
   if (isFolk) {
     return {
       label: 'Traditional world folk',
       profile: 'folk_traditional',
       descriptor: 'traditional world folk composition',
-      atmosphere: 'earthy cultural richness and timeless melodic depth',
+      atmosphere: 'earthy cultural richness, acoustic authenticity, and timeless melodic depth',
       isAcoustic: true,
       isIntimate: true,
       isHeavy: false,
@@ -284,15 +306,20 @@ export const derivePrimaryIntent = (
 };
 
 /**
- * Deterministic Semantic Validator:
- * Validates tag coherence against the Primary Intent Lock.
- * Detects and removes blatant contradictions (e.g. metal drop on acoustic ballad)
- * while preserving legitimate hybrid genres (e.g. Nordic symphonic folk metal).
+ * Deterministic Semantic Validator with V4.3 Quality Engine Integration:
+ * 1. Validates tag coherence against the Primary Intent Lock.
+ * 2. Applies Unsupported Inference Guard, Genre Drift Guard, Vocal Fidelity Lock,
+ *    and Instrument Fidelity via applyQualityEngine.
  */
 export const validateSelectionsWithIntent = (
   rawSelections: Partial<Record<CategoryKey, string[]>>,
-  intent: PrimaryIntent
+  intent: PrimaryIntent,
+  userProfile?: UserIntentProfile | string
 ): { validatedSelections: SelectionState; removedTags: RemovedTagReport[] } => {
+  const profile = typeof userProfile === 'string'
+    ? buildUserIntentProfile(userProfile)
+    : userProfile || buildUserIntentProfile(intent.label);
+
   const result = createEmptySelections();
   const removed: RemovedTagReport[] = [];
 
@@ -332,6 +359,12 @@ export const validateSelectionsWithIntent = (
     const list = Array.isArray(rawSelections[category]) ? rawSelections[category]! : [];
 
     list.forEach(tag => {
+      // Pre-Rule 0: Exclusion & Negation Guard (Priority 1)
+      if (isTagExcluded(category, tag, profile.exclusions)) {
+        rejectTag(category, tag, `Yếu tố "${tag}" bị loại trừ rõ ràng theo yêu cầu người dùng`);
+        return;
+      }
+
       // Rule 1: Acoustic Ballads & Piano Ballads Contradiction Guard
       if (intent.profile === 'acoustic_ballad' || intent.profile === 'piano_ballad') {
         if (category === 'genres' && (heavyMetalGenres.has(tag) || aggressiveEdmGenres.has(tag))) {
@@ -382,12 +415,10 @@ export const validateSelectionsWithIntent = (
       }
 
       // Rule 4: Direct Pair Contradictions
-      // No Drums vs Drum Kit
       if (tag === 'No Drums' && (rawSelections.instruments || []).some(i => i.includes('Drum') || i === 'Timpani')) {
         rejectTag(category, tag, `Xung đột trực tiếp với dàn trống đã chọn`);
         return;
       }
-      // Unplugged / Acoustic vs extreme distortion
       if (tag === 'Unplugged' && (rawSelections.effects || []).includes('Distortion')) {
         rejectTag(category, tag, `Xung đột giữa Mộc (Unplugged) và Méo tiếng (Distortion)`);
         return;
@@ -397,25 +428,22 @@ export const validateSelectionsWithIntent = (
     });
   });
 
-  // Cap density to ensure musical coherence over tag dumping
-  result.genres = result.genres.slice(0, 3);
-  result.moods = result.moods.slice(0, 3);
-  result.instruments = result.instruments.slice(0, 5);
-  result.vocals = result.vocals.slice(0, 2);
-  result.structure = result.structure.slice(0, 2);
-  result.production = result.production.slice(0, 2);
-  result.effects = result.effects.slice(0, 2);
-  result.v5Performance = result.v5Performance.slice(0, 2);
-  result.v5Advanced = result.v5Advanced.slice(0, 2);
-  result.mixingPresets = result.mixingPresets.slice(0, 2);
-  result.animeDrama = result.animeDrama.slice(0, 2);
+  // Apply V4.3 Quality Engine Pipeline:
+  // Unsupported Inference Guard, Genre Drift Guard, Vocal Fidelity Lock, Instrument Fidelity
+  const quality = applyQualityEngine(result, intent, profile);
 
-  return { validatedSelections: result, removedTags: removed };
+  return {
+    validatedSelections: quality.selections,
+    removedTags: [...removed, ...quality.removedTags]
+  };
 };
 
 /**
- * Deterministic Prompt Health Evaluator:
+ * Deterministic Prompt Health V2 Evaluator:
  * Calculates a 0-100 quality score and status without calling Gemini.
+ * Evaluates tag density, primary intent alignment, unsupported strong additions,
+ * era drift, vocal contradiction, explicit instrument omission, arrangement progression,
+ * and language leakage.
  */
 export const evaluatePromptHealth = (
   idea: string,
@@ -425,18 +453,18 @@ export const evaluatePromptHealth = (
 ): PromptHealthResult => {
   let score = 95;
   const reasons: string[] = [];
+  const profile = buildUserIntentProfile(idea);
+  const intent = derivePrimaryIntent(idea, optimizedIdea, selections, profile);
 
   const totalTags = Object.values(selections).reduce((acc, list) => acc + list.length, 0);
 
   // 1. Tag Density & Completeness
   if (totalTags === 0) {
-    score = 45;
-    reasons.push('Chưa có thẻ phong cách nào được chọn');
     return {
-      score,
+      score: 40,
       status: 'Needs Review',
       summary: 'Prompt trống hoặc thiếu hoàn toàn các thành phần âm nhạc cốt lõi.',
-      reasons,
+      reasons: ['Chưa có thẻ phong cách nào được chọn'],
     };
   }
 
@@ -466,36 +494,101 @@ export const evaluatePromptHealth = (
     reasons.push('Mật độ thẻ cân đối, tập trung vào bản sắc bài hát');
   }
 
-  // 2. Primary Intent Alignment
-  const intent = derivePrimaryIntent(idea, optimizedIdea, selections);
-  const text = `${idea} ${optimizedIdea} ${promptText}`.toLowerCase();
+  const promptLower = promptText.toLowerCase();
 
+  // 2. Unsupported Strong Genre Additions Guard
+  const strongGenres = ['1980s', 'Retro', 'Synthwave', 'Cyberpunk', 'Lo-Fi', 'Metal', 'Trap', 'Jazz', 'Gospel'];
+  const unsupportedInSelections = strongGenres.filter(sg => {
+    const hasTag = selections.genres.includes(sg) || selections.production.includes(sg);
+    return hasTag && !hasExplicitSupport(sg, profile);
+  });
+  if (unsupportedInSelections.length > 0) {
+    score -= 18;
+    reasons.push(`Phát hiện thể loại mạnh chưa có căn cứ từ yêu cầu: ${unsupportedInSelections.join(', ')}`);
+  }
+
+  // 3. Era Drift Guard
+  if (profile.isModernExplicit) {
+    const hasOldEra = selections.production.some(p => p === '1980s' || p === 'Retro' || p === 'Vintage' || p === '1970s') ||
+      promptLower.includes('1980s') || promptLower.includes('synthwave');
+    if (hasOldEra) {
+      score -= 15;
+      reasons.push('Phát hiện lệch thời đại (Era Drift: yêu cầu hiện đại nhưng xuất hiện phong cách thập niên cũ)');
+    }
+  }
+
+  // 4. Vocal Contradiction Guard
+  if (profile.vocalGender === 'male' && (selections.vocals.includes('Female Vocal') || /female vocal/i.test(promptLower))) {
+    score -= 25;
+    reasons.push('Xung đột giọng hát: người dùng yêu cầu giọng nam nhưng xuất hiện giọng nữ');
+  } else if (profile.vocalGender === 'female' && (selections.vocals.includes('Male Vocal') || /male vocal/i.test(promptLower))) {
+    score -= 25;
+    reasons.push('Xung đột giọng hát: người dùng yêu cầu giọng nữ nhưng xuất hiện giọng nam');
+  } else if (profile.isInstrumental && (selections.vocals.length > 0 || (promptLower.includes('vocal') && !promptLower.includes('no vocal') && !promptLower.includes('instrumental')))) {
+    score -= 25;
+    reasons.push('Xung đột: người dùng yêu cầu nhạc không lời nhưng prompt có chứa giọng hát');
+  }
+
+  // 5. Explicit Instrument Omission Guard
+  if (profile.explicitInstruments.length > 0) {
+    const missing = profile.explicitInstruments.filter(inst => {
+      const inSel = selections.instruments.includes(inst);
+      const inPrompt = promptLower.includes(inst.toLowerCase());
+      return !inSel && !inPrompt;
+    });
+    if (missing.length > 0) {
+      score -= 15;
+      reasons.push(`Bỏ sót nhạc cụ người dùng yêu cầu trực tiếp: ${missing.join(', ')}`);
+    }
+  }
+
+  // 6. Arrangement Mismatch Guard
+  if (profile.explicitArrangement.length > 0) {
+    const expectsDrop = profile.explicitArrangement.some(a => a.includes('drop'));
+    const hasDrop = selections.production.includes('[Bass Drop]') || promptLower.includes('drop');
+    if (expectsDrop && !hasDrop) {
+      score -= 10;
+      reasons.push('Chưa phản ánh đoạn cao trào / drop người dùng yêu cầu');
+    }
+  }
+
+  // 7. Language Leakage into English prompt
+  const vietnameseLeakRegex = /\b(bài hát về|lời bài hát|giọng nam|giọng nữ|đoạn cao trào|điệp khúc|mở đầu|kết thúc|không lời|tiếng việt|nhạc mộc)\b/i;
+  if (vietnameseLeakRegex.test(promptText)) {
+    score -= 15;
+    reasons.push('Phát hiện rò rỉ cụm từ tiếng Việt vào prompt phong cách tiếng Anh');
+  }
+
+  // 8. Acoustic vs Heavy clash check
+  const text = `${profile.exclusions.positiveText} ${optimizedIdea} ${promptText}`.toLowerCase();
   if (intent.isAcoustic && /metal|dubstep|hardcore|screaming|distortion/.test(text)) {
     score -= 25;
     reasons.push('Phát hiện xung đột giữa phối khí mộc và hiệu ứng nặng/điện tử');
   }
 
-  if (intent.profile === 'ambient_meditative' && /aggressive|punchy|fast bpm|guitar shredding/.test(text)) {
-    score -= 25;
-    reasons.push('Phát hiện cao trào/tiết tấu nhanh xung đột với ambient tĩnh lặng');
-  }
-
-  // 3. Prompt Repetition Check
-  const words = promptText.toLowerCase().match(/\b[a-z]{4,}\b/g) || [];
-  const wordCounts: Record<string, number> = {};
-  const ignored = new Set(['with', 'natural', 'song', 'track', 'music', 'clear', 'vocal', 'rhythm', 'arrangement', 'production']);
-  words.forEach(w => {
-    if (!ignored.has(w)) {
-      wordCounts[w] = (wordCounts[w] || 0) + 1;
+  // 9. Negation & Exclusion Contradiction Guard (Major Contradiction)
+  if (profile.exclusions.excludedKeywords.length > 0) {
+    const leakedExclusions: string[] = [];
+    profile.exclusions.excludedKeywords.forEach(kw => {
+      if (kw.length >= 3) {
+        // Prevent false positive on sub-words like 'acoustic' when 'electric' is excluded
+        const inPrompt = promptLower.split(/[,.\s]+/).some(token => token === kw) || (promptLower.includes(kw) && !promptLower.includes(`no ${kw}`) && !promptLower.includes(`without ${kw}`));
+        const inSelections = Object.values(selections).flat().some(t => {
+          const tLower = t.toLowerCase();
+          return tLower === kw || tLower.includes(kw);
+        });
+        if (inPrompt || inSelections) {
+          if (!leakedExclusions.includes(kw)) leakedExclusions.push(kw);
+        }
+      }
+    });
+    if (leakedExclusions.length > 0) {
+      score -= 30;
+      reasons.push(`Xung đột nghiêm trọng: Yếu tố người dùng đã loại trừ ("${leakedExclusions.join(', ')}") vẫn xuất hiện trong bản phối.`);
     }
-  });
-  const repeated = Object.entries(wordCounts).filter(([_, count]) => count >= 3);
-  if (repeated.length > 0) {
-    score -= 10;
-    reasons.push(`Lặp từ trong prompt: ${repeated.map(([w]) => `"${w}"`).join(', ')}`);
   }
 
-  // Clamp score
+  // Clamp score between 0 and 100
   const finalScore = Math.max(0, Math.min(100, score));
 
   let status: 'Excellent' | 'Good' | 'Needs Review';
@@ -503,13 +596,13 @@ export const evaluatePromptHealth = (
 
   if (finalScore >= 90) {
     status = 'Excellent';
-    summary = `Bản phối có độ nhất quán cao theo chuẩn "${intent.label}", cấu trúc hài hòa và tự nhiên.`;
+    summary = `Bản phối có độ nhất quán cao theo chuẩn "${intent.label}", cấu trúc hài hòa và trung thực với yêu cầu.`;
   } else if (finalScore >= 75) {
     status = 'Good';
-    summary = `Bản phối có định hướng tốt theo "${intent.label}", có thể tinh chỉnh thêm một vài chi tiết.`;
+    summary = `Bản phối có định hướng tốt theo "${intent.label}", đáp ứng các chỉ tiêu âm nhạc chính.`;
   } else {
     status = 'Needs Review';
-    summary = 'Cần rà soát lại để tránh xung đột thể loại hoặc mật độ thẻ quá tải.';
+    summary = 'Cần rà soát lại để loại bỏ lệch thể loại, xung đột giọng hát hoặc nhạc cụ bị bỏ sót.';
   }
 
   return {
