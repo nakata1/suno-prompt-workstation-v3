@@ -72,6 +72,10 @@ export const buildMusicBlueprint = (rawInput: string): MusicBlueprint => {
   // 1. EXCLUSIONS MAPPING
   // =========================================================================
   const exclusions: string[] = [...exclusionsProfile.rawExclusions];
+  if (exclusionsProfile.excludeSynthesizer) {
+    if (!exclusions.includes('Synthesizer')) exclusions.push('Synthesizer');
+    if (!exclusions.includes('Electronic Synth')) exclusions.push('Electronic Synth');
+  }
 
   // Specific instrument exclusions
   const excludedInstruments: string[] = [];
@@ -91,7 +95,21 @@ export const buildMusicBlueprint = (rawInput: string): MusicBlueprint => {
     excludedInstruments.push('Acoustic Guitar');
   }
   if (exclusionsProfile.excludeSynthesizer || exclusionsProfile.excludeEdm) {
-    excludedInstruments.push('Synthesizer', 'Sawtooth Wave', 'Sub-bass', '808 Bass');
+    excludedInstruments.push(
+      'Synthesizer',
+      'Electronic Synth',
+      'Sawtooth Wave',
+      'Square Wave',
+      'Sub-bass',
+      '808 Bass',
+      'Reese Bass',
+      'Analog Synth',
+      'Modular Synth',
+      'Wavetable Synth',
+      'FM Synth',
+      'Moog Synth',
+      'Arpeggiator'
+    );
   }
 
   // Record negative directives in explicitRequirements for transparency

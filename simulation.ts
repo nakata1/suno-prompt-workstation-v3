@@ -461,14 +461,14 @@ export const musicDirectorFallback = (input: string, isOverloaded: boolean = fal
   const selections: Partial<Record<CategoryKey, string[]>> = {};
 
   base.forEach(({category, tag}) => {
-    if (!isTagExcluded(category, tag, profile.exclusions) && !blueprint.exclusions.some(e => e.toLowerCase() === tag.toLowerCase())) {
+    if (!isTagExcluded(category, tag, profile.exclusions) && !(blueprint.exclusions || []).some(e => e.toLowerCase() === tag.toLowerCase())) {
       selections[category] = Array.from(new Set([...(selections[category] || []), tag]));
     }
   });
 
   const addFirstAvailable = (category: CategoryKey, candidates: string[]) => {
     const allowed = new Set(allowedTags[category]);
-    const hit = candidates.find(x => allowed.has(x) && !isTagExcluded(category, x, profile.exclusions) && !blueprint.exclusions.some(e => e.toLowerCase() === x.toLowerCase()));
+    const hit = candidates.find(x => allowed.has(x) && !isTagExcluded(category, x, profile.exclusions) && !(blueprint.exclusions || []).some(e => e.toLowerCase() === x.toLowerCase()));
     if (hit && !(selections[category] || []).includes(hit)) {
       selections[category] = [...(selections[category] || []), hit];
     }

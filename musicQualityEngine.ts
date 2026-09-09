@@ -209,7 +209,9 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
       const p = item.toLowerCase();
       if (!p) return;
 
-      const cleanKeyword = p.replace(/^(?:dùng|có|phong\s+cách|theo|cho|thêm|bất\s+kỳ|any)\s+/i, '').trim();
+      const cleanKeyword = p
+        .replace(/^(?:dùng|có|phong\s+cách|theo|cho|thêm|bất\s+kỳ|any|no|without(?:\s+any)?|exclude|excluding|avoid|không(?:\s+dùng|\s+có)?|tránh|loại\s+bỏ)\s+/i, '')
+        .trim();
       if (cleanKeyword.length >= 2 && !excludedKeywords.includes(cleanKeyword)) {
         excludedKeywords.push(cleanKeyword);
       }
@@ -307,10 +309,14 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
         if (!rawExclusions.includes('Piano')) rawExclusions.push('Piano');
       }
 
-      // Check Synthesizer
-      if (/\b(?:synth|synthesizer|sawtooth|sub-bass|electronic\s*synth)\b/i.test(p)) {
+      // Check Synthesizer (comprehensive match for all synth / electronic synth variants)
+      if (
+        /\b(?:electronic\s*synthesizers?|electronic\s*synths?|synthesizers?|synths?|sawtooth|sub-bass|808\s*bass|reese\s*bass|analog\s*synths?|modular\s*synths?|wavetable\s*synths?|fm\s*synths?|moog\s*synths?|tiếng\s*synth|đàn\s*synth|nhạc\s*cụ\s*điện\s*tử)\b/i.test(p) ||
+        /\b(?:electronic\s*synthesizers?|electronic\s*synths?|synthesizers?|synths?|sawtooth|sub-bass|808\s*bass|reese\s*bass|analog\s*synths?|modular\s*synths?|wavetable\s*synths?|fm\s*synths?|moog\s*synths?|tiếng\s*synth|đàn\s*synth|nhạc\s*cụ\s*điện\s*tử)\b/i.test(cleanKeyword)
+      ) {
         excludeSynthesizer = true;
         if (!rawExclusions.includes('Synthesizer')) rawExclusions.push('Synthesizer');
+        if (!rawExclusions.includes('Electronic Synth')) rawExclusions.push('Electronic Synth');
       }
 
       // Check Strings
@@ -343,9 +349,33 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
     });
   });
 
+  // Explicit synth exclusion expressions check across raw input text:
+  // "no electronic synths", "no synths", "no synthesizer", "no synthesizers",
+  // "without electronic synths", "without synths", "without synthesizer", "without synthesizers",
+  // "exclude synths", "exclude synthesizers", "avoid synths", and Vietnamese equivalents
+  const explicitSynthRegex =
+    /\b(?:no|without(?:\s+any)?|exclude|excluding|avoid|không(?:\s+dùng|\s+có)?|tránh|loại\s+bỏ)\s+(?:electronic\s+synths?|electronic\s+synthesizers?|synths?|synthesizers?)\b/i;
+  if (explicitSynthRegex.test(text)) {
+    excludeSynthesizer = true;
+    if (!rawExclusions.includes('Synthesizer')) rawExclusions.push('Synthesizer');
+    if (!rawExclusions.includes('Electronic Synth')) rawExclusions.push('Electronic Synth');
+    if (!excludedKeywords.includes('electronic synths')) excludedKeywords.push('electronic synths');
+    if (!excludedKeywords.includes('synthesizer')) excludedKeywords.push('synthesizer');
+    if (!excludedKeywords.includes('synths')) excludedKeywords.push('synths');
+  }
+
+  let finalPositive = positiveText;
+  if (excludeSynthesizer) {
+    finalPositive = finalPositive
+      .replace(explicitSynthRegex, '')
+      .replace(/\s+,/g, ',')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   return {
     rawExclusions,
-    positiveText: positiveText || text,
+    positiveText: finalPositive || text,
     excludedKeywords,
     excludeMetal,
     excludeEdm,
@@ -422,7 +452,23 @@ export const isTagExcluded = (
     if (exclusions.excludeWarDrums && (tag === 'Taiko' || tagLower.includes('war drum') || tag === 'Timpani')) return true;
     if (exclusions.excludeDrums && (tagLower.includes('drum') || tag === 'Taiko' || tag === 'Timpani' || tag === '808 Kick')) return true;
     if (exclusions.excludeHeavyDrums && (tag === '808 Kick' || tag === 'Power Drums' || tag === 'Electronic Drums')) return true;
-    if (exclusions.excludeSynthesizer && (tag === 'Synthesizer' || tag === 'Sawtooth Wave' || tag === 'Sub-bass')) return true;
+    if (exclusions.excludeSynthesizer && (
+      tag === 'Synthesizer' ||
+      tag === 'Electronic Synth' ||
+      tag === 'Sawtooth Wave' ||
+      tag === 'Square Wave' ||
+      tag === 'Sub-bass' ||
+      tag === '808 Bass' ||
+      tag === 'Reese Bass' ||
+      tag === 'Analog Synth' ||
+      tag === 'Modular Synth' ||
+      tag === 'Wavetable Synth' ||
+      tag === 'FM Synth' ||
+      tag === 'Moog Synth' ||
+      tag === 'Arpeggiator' ||
+      tagLower.includes('synth') ||
+      tagLower.includes('synthesizer')
+    )) return true;
     if (exclusions.excludeStrings && (tag === 'String Section' || tag === 'Violin' || tag === 'Cello')) return true;
   }
 
@@ -440,6 +486,7 @@ export const isTagExcluded = (
     if (exclusions.excludeEdm && (tag === '[Bass Drop]' || tag === 'Bass Boosted' || tag === 'Punchy')) return true;
     if (exclusions.excludeLofi && (tag === 'Lo-Fi' || tag === 'Vinyl Crackle')) return true;
     if (exclusions.excludeHeavyDrums && tag === 'Power Drums') return true;
+    if (exclusions.excludeSynthesizer && (tagLower.includes('synth') || tagLower.includes('synthesizer'))) return true;
   }
 
   return false;
@@ -596,9 +643,9 @@ export const buildUserIntentProfile = (rawInput: string): UserIntentProfile => {
     else addInst('Electric Guitar');
   }
 
-  if (/sub-bass|sub bass/i.test(lower)) addInst('Sub-bass');
-  if (/supersaw|super-saw|sawtooth/i.test(lower)) addInst('Sawtooth Wave');
-  if (/synth|synthesizer/i.test(lower)) addInst('Synthesizer');
+  if (/sub-bass|sub bass/i.test(lower) && !exclusions.excludeSynthesizer && !exclusions.excludeEdm) addInst('Sub-bass');
+  if (/supersaw|super-saw|sawtooth/i.test(lower) && !exclusions.excludeSynthesizer && !exclusions.excludeEdm) addInst('Sawtooth Wave');
+  if (/synth|synthesizer/i.test(lower) && !exclusions.excludeSynthesizer && !exclusions.excludeEdm) addInst('Synthesizer');
   if (/punchy kick|808 kick|kick/i.test(lower) && !exclusions.excludeHeavyDrums) addInst('808 Kick');
   if (/808 bass/i.test(lower)) addInst('808 Bass');
   if (/war drums|trống trận|trong tran/i.test(lower) && !exclusions.excludeHeavyDrums) {

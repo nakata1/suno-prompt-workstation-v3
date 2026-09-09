@@ -160,7 +160,10 @@ const buildNormalizedExclusions = (exclusions: ExclusionProfile): string[] => {
   if (exclusions.excludeWarDrums) add('War Drums');
   if (exclusions.excludeHeavyDrums) add('Aggressive Drums');
   if (exclusions.excludeDrums) add('Drums');
-  if (exclusions.excludeSynthesizer) add('Synthesizer');
+  if (exclusions.excludeSynthesizer) {
+    add('Electronic Synth');
+    add('Synthesizer');
+  }
   if (exclusions.excludeStrings) add('Strings');
 
   return result;
@@ -180,7 +183,7 @@ const detectAndResolveConflicts = (
   exclusions: ExclusionProfile,
   mustInclude: string[],
   mustExclude: string[],
-  selections: Partial<Record<CategoryKey, string[]>>
+  selections: Partial<Record<CategoryKey, string[]>> = {}
 ): { conflicts: string[]; conflictResolutions: string[] } => {
   const conflicts: string[] = [];
   const conflictResolutions: string[] = [];
@@ -193,7 +196,7 @@ const detectAndResolveConflicts = (
 
   const hasVocalDirective =
     /\b(?:female\s*(?:lead\s*)?vocals?|giọng\s*nữ|male\s*(?:lead\s*)?vocals?|giọng\s*nam|lead\s*vocals?|choir|hợp\s*xướng|tiếng\s*hát)\b/i.test(rawInput) ||
-    (selections.vocals && selections.vocals.length > 0 && !hasInstrumentalDirective);
+    (Boolean(selections?.vocals && selections.vocals.length > 0) && !hasInstrumentalDirective);
 
   if (hasInstrumentalDirective && hasVocalDirective) {
     conflicts.push('Nhạc không lời (Instrumental) vs. Giọng hát (Lead Vocals)');
@@ -203,21 +206,21 @@ const detectAndResolveConflicts = (
   // Conflict 2: Excluded Guitar vs. Guitar presence
   if (exclusions.excludeGuitar) {
     const requestedGuitar = mustInclude.find(item => /guitar/i.test(item));
-    const selectedGuitar = selections.instruments?.find(item => /guitar/i.test(item));
+    const selectedGuitar = selections?.instruments?.find(item => /guitar/i.test(item));
     if (requestedGuitar || selectedGuitar) {
       conflicts.push('Yêu cầu loại trừ Guitar vs. Nhạc cụ Guitar');
       conflictResolutions.push('Ưu tiên lệnh loại trừ (1): Đã tự động loại bỏ Guitar khỏi bản phối.');
     }
   } else if (exclusions.excludeElectricGuitar) {
     const requestedElectric = mustInclude.find(item => /electric|distorted/i.test(item));
-    const selectedElectric = selections.instruments?.find(item => /electric|distorted/i.test(item));
+    const selectedElectric = selections?.instruments?.find(item => /electric|distorted/i.test(item));
     if (requestedElectric || selectedElectric) {
       conflicts.push('Yêu cầu loại trừ Guitar điện vs. Nhạc cụ Guitar điện');
       conflictResolutions.push('Ưu tiên lệnh loại trừ (1): Đã tự động loại bỏ Guitar điện khỏi bản phối.');
     }
   } else if (exclusions.excludeAcousticGuitar) {
     const requestedAcoustic = mustInclude.find(item => /acoustic\s*guitar/i.test(item));
-    const selectedAcoustic = selections.instruments?.find(item => /acoustic\s*guitar/i.test(item));
+    const selectedAcoustic = selections?.instruments?.find(item => /acoustic\s*guitar/i.test(item));
     if (requestedAcoustic || selectedAcoustic) {
       conflicts.push('Yêu cầu loại trừ Guitar mộc vs. Nhạc cụ Guitar mộc');
       conflictResolutions.push('Ưu tiên lệnh loại trừ (1): Đã tự động loại bỏ Guitar mộc khỏi bản phối.');
@@ -226,7 +229,7 @@ const detectAndResolveConflicts = (
 
   // Conflict 3: Excluded Choir vs. Choir
   if (exclusions.excludeChoir) {
-    if (mustInclude.includes('Choir') || selections.vocals?.includes('Choir') || selections.instruments?.includes('Choir')) {
+    if (mustInclude.includes('Choir') || selections?.vocals?.includes('Choir') || selections?.instruments?.includes('Choir')) {
       conflicts.push('Yêu cầu loại trừ Hợp xướng (Choir) vs. Choir');
       conflictResolutions.push('Ưu tiên lệnh loại trừ (1): Đã tự động gỡ bỏ Choir khỏi dàn hợp xướng.');
     }
@@ -234,8 +237,8 @@ const detectAndResolveConflicts = (
 
   // Conflict 4: Excluded EDM/Synth vs. Electronic Elements
   if (exclusions.excludeEdm || exclusions.excludeSynthesizer) {
-    const hasSynth = selections.instruments?.some(i => /synthesizer|sawtooth|sub-bass/i.test(i)) ||
-      selections.production?.some(p => /drop|electronic/i.test(p));
+    const hasSynth = selections?.instruments?.some(i => /synthesizer|sawtooth|sub-bass/i.test(i)) ||
+      selections?.production?.some(p => /drop|electronic/i.test(p));
     if (hasSynth) {
       conflicts.push('Yêu cầu loại trừ EDM / Synthesizer vs. Yếu tố điện tử');
       conflictResolutions.push('Ưu tiên lệnh loại trừ (1): Loại bỏ synthesizer và hiệu ứng nhạc điện tử.');
@@ -244,7 +247,7 @@ const detectAndResolveConflicts = (
 
   // Conflict 5: Excluded Drums vs. Drums
   if (exclusions.excludeHeavyDrums || exclusions.excludeDrums) {
-    const hasHeavyDrums = selections.instruments?.some(i => /war drums?|808 kick|power drums|taiko/i.test(i));
+    const hasHeavyDrums = selections?.instruments?.some(i => /war drums?|808 kick|power drums|taiko/i.test(i));
     if (hasHeavyDrums) {
       conflicts.push('Yêu cầu loại trừ Trống / Tiết tấu mạnh vs. Bộ trống phối');
       conflictResolutions.push('Ưu tiên lệnh loại trừ (1): Đã gỡ bỏ bộ gõ dồn dập.');
@@ -253,7 +256,7 @@ const detectAndResolveConflicts = (
 
   // Conflict 6: Acoustic Ballad vs. Heavy Metal
   if ((/acoustic|ballad|mộc/i.test(lowerInput) && !exclusions.excludeAcoustic) &&
-      (selections.genres?.some(g => /metal/i.test(g)) || selections.instruments?.some(i => /distorted guitar/i.test(i)))) {
+      (selections?.genres?.some(g => /metal/i.test(g)) || selections?.instruments?.some(i => /distorted guitar/i.test(i)))) {
     conflicts.push('Phong cách Mộc (Acoustic) vs. Phối khí Heavy Metal');
     conflictResolutions.push('Ưu tiên phong cách chủ đạo (3): Đã loại bỏ Heavy Metal để giữ chất mộc.');
   }
@@ -272,9 +275,9 @@ const detectAndResolveConflicts = (
 export const buildMusicIntentProfile = (
   rawInput: string,
   blueprint: MusicBlueprint,
-  selections: Partial<Record<CategoryKey, string[]>>,
-  source: 'gemini' | 'local',
-  confidence: number,
+  selections: Partial<Record<CategoryKey, string[]>> = {},
+  source: 'gemini' | 'local' = 'local',
+  confidence: number = 0.95,
   fallbackReason?: 'overload' | 'unavailable'
 ): MusicIntentProfile => {
   const input = (rawInput || '').trim();
@@ -287,6 +290,15 @@ export const buildMusicIntentProfile = (
 
   const isExcluded = (item: string): boolean => {
     const lower = item.toLowerCase();
+    if (exclusionsProfile.excludeSynthesizer) {
+      if (
+        /\b(?:synths?|synthesizers?|sawtooth|sub-bass|808\s*bass|reese\s*bass|analog\s*synth|modular\s*synth|wavetable\s*synth|fm\s*synth|moog\s*synth)\b/i.test(lower) ||
+        lower.includes('synth') ||
+        lower.includes('synthesizer')
+      ) {
+        return true;
+      }
+    }
     return lowerExcludes.some(e => lower === e || lower.includes(e) || (e.length >= 3 && lower.includes(e)));
   };
 

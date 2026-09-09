@@ -135,7 +135,12 @@ export const composeSunoStylePrompt = (
     ...cleanSelections.effects
   ];
   // Filter out generic buzzwords
-  const prodElements = unique(rawProd.filter(p => !/studio quality|masterpiece|high-fidelity/i.test(p)));
+  const prodElements = unique(rawProd.filter(p => {
+    if (/studio quality|masterpiece|high-fidelity/i.test(p)) return false;
+    if (profile.exclusions.excludeSynthesizer && (/synth|synthesizer/i.test(p))) return false;
+    if (blueprint.exclusions.some(ex => ex.toLowerCase() === p.toLowerCase())) return false;
+    return true;
+  }));
   if (prodElements.length) {
     sentences.push(`Production aesthetic: ${prodElements.join(', ')}, wide stereo imaging, and natural frequency response`);
   }
@@ -209,6 +214,13 @@ export const recommendSunoSettings = (
     if (!exclude.includes('male vocal')) exclude.push('male vocal');
   } else if (vocalAuth.authority === 'male') {
     if (!exclude.includes('female vocal')) exclude.push('female vocal');
+  }
+
+  // Ensure explicit synth exclusions are propagated
+  if (profile.exclusions.excludeSynthesizer) {
+    if (!exclude.includes('electronic synths')) exclude.push('electronic synths');
+    if (!exclude.includes('synthesizer')) exclude.push('synthesizer');
+    if (!exclude.includes('synths')) exclude.push('synths');
   }
 
   if (/acoustic|folk|ballad|bolero|piano/.test(positiveHay) || blueprint.primaryStyle.includes('ballad')) {
