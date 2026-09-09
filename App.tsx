@@ -7,6 +7,7 @@ import {
 import { SelectionState, CategoryKey } from './types';
 import { composeSunoStylePrompt, recommendSunoSettings, buildSunoExportPack, SunoModelProfile } from './sunoAdapter';
 import { analyzeImageSim, optimizePromptAI, generateLyricsAI, suggestTagsSim, generatePromptAI, runMusicDirectorAI } from './simulation';
+import { createEmptySelections, evaluatePromptHealth, PromptHealthResult } from './semanticValidator';
 import { 
   Wand2, Music, Mic, Layers, Settings, PlayCircle, Copy, Trash2, 
   Image as ImageIcon, Sparkles, Loader2, Info, Languages, Rocket, Zap, Lightbulb,
@@ -40,7 +41,9 @@ const App: React.FC = () => {
   const [isDirecting, setIsDirecting] = useState(false);
   const [directorNote, setDirectorNote] = useState('');
   const [directorEngine, setDirectorEngine] = useState<'gemini' | 'local' | 'unknown'>('unknown');
+  const [directorFallbackReason, setDirectorFallbackReason] = useState<'overload' | 'unavailable' | null>(null);
   const [directorConfidence, setDirectorConfidence] = useState<number | null>(null);
+  const [promptHealth, setPromptHealth] = useState<PromptHealthResult | null>(null);
   const [aiModel, setAiModel] = useState('');
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
   
@@ -71,7 +74,15 @@ const App: React.FC = () => {
   useEffect(() => {
     let active = true;
     fetch('/api/health')
-      .then(res => res.ok ? res.json() : Promise.reject(new Error('health unavailable')))
+      .then(async res => {
+        if (!res.ok) throw new Error('health unavailable');
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.toLowerCase().includes('application/json')) {
+          await res.text().catch(() => '');
+          throw new Error('health non-json');
+        }
+        return res.json();
+      })
       .then(data => {
         if (!active) return;
         setAiConfigured(Boolean(data.aiConfigured));
@@ -85,23 +96,9 @@ const App: React.FC = () => {
 
   // Update prompt whenever selections or optimized idea change
   useEffect(() => {
-    const parts: string[] = [];
-    if (optimizedIdea) parts.push(optimizedIdea);
-
-    // Order: Genres -> Moods -> Anime/Drama -> Production -> Mixing -> V5 Performance -> Instruments -> Effects -> Vocals -> Structure -> V5 Advanced
-    if (selections.genres.length) parts.push(selections.genres.join(', '));
-    if (selections.moods.length) parts.push(selections.moods.join(', '));
-    if (selections.animeDrama.length) parts.push(selections.animeDrama.join(', '));
-    if (selections.production.length) parts.push(selections.production.join(', '));
-    if (selections.mixingPresets.length) parts.push(selections.mixingPresets.join(', '));
-    if (selections.v5Performance.length) parts.push(selections.v5Performance.join(', '));
-    if (selections.instruments.length) parts.push(selections.instruments.join(', '));
-    if (selections.effects.length) parts.push(selections.effects.join(', '));
-    if (selections.vocals.length) parts.push(selections.vocals.join(', '));
-    if (selections.structure.length) parts.push(selections.structure.join(', '));
-    if (selections.v5Advanced.length) parts.push(selections.v5Advanced.join(', '));
-
-    setGeneratedPrompt(composeSunoStylePrompt(aiInput, optimizedIdea, selections, sunoModelProfile));
+    const prompt = composeSunoStylePrompt(aiInput, optimizedIdea, selections, sunoModelProfile);
+    setGeneratedPrompt(prompt);
+    setPromptHealth(evaluatePromptHealth(aiInput, optimizedIdea, selections, prompt));
   }, [selections, optimizedIdea, aiInput, sunoModelProfile]);
 
   const sunoSettings = recommendSunoSettings(aiInput || optimizedIdea, selections, sunoModelProfile);
@@ -132,10 +129,7 @@ const App: React.FC = () => {
   };
 
   const clearAll = () => {
-    setSelections({
-      genres: [], production: [], instruments: [], moods: [], vocals: [], structure: [], effects: [],
-      v5Advanced: [], mixingPresets: [], animeDrama: [], v5Performance: []
-    });
+    setSelections(createEmptySelections());
     setOptimizedIdea('');
     setAiInput('');
     setLyricsOutput('');
@@ -144,7 +138,9 @@ const App: React.FC = () => {
     setCustomLyricsLang('');
     setDirectorNote('');
     setDirectorEngine('unknown');
+    setDirectorFallbackReason(null);
     setDirectorConfidence(null);
+    setPromptHealth(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
     showFeedback('Đã xóa tất cả', 'info');
   };
@@ -266,18 +262,21 @@ const App: React.FC = () => {
     try {
       const result = await runMusicDirectorAI(aiInput);
       setOptimizedIdea(result.creativeDirection);
-      setDirectorNote(result.rationale);
+      const notePrefix = result.primaryIntent ? `[${result.primaryIntent.label}] ` : '';
+      setDirectorNote(`${notePrefix}${result.rationale}`);
       setDirectorEngine(result.engine);
+      setDirectorFallbackReason(result.fallbackReason ?? null);
       setDirectorConfidence(result.confidence);
       if (result.model) setAiModel(result.model);
-      setSelections(prev => {
-        const next = { ...prev };
-        (Object.keys(result.selections) as CategoryKey[]).forEach(category => {
-          const values = result.selections[category];
-          if (values && values.length) next[category] = values;
-        });
-        return next;
+
+      // SELECTION RESET GUARD: Start with fresh clean selection set so previous AI tags never leak
+      const cleanFresh = createEmptySelections();
+      (Object.keys(cleanFresh) as CategoryKey[]).forEach(category => {
+        const values = result.selections[category];
+        cleanFresh[category] = Array.isArray(values) ? [...values] : [];
       });
+      setSelections(cleanFresh);
+
       showFeedback(result.engine === 'gemini'
         ? 'Gemini Music Director đã phối bộ phong cách hoàn chỉnh!'
         : 'Local Music Director đã tạo bộ phong cách dự phòng.');
@@ -512,8 +511,26 @@ const App: React.FC = () => {
                       Confidence {Math.round(directorConfidence * 100)}%
                     </span>
                   )}
+                  {promptHealth && (
+                    <span
+                      title={promptHealth.summary}
+                      className={`px-3 py-1.5 rounded-full font-bold transition-all ${
+                        promptHealth.status === 'Excellent' ? 'bg-emerald-100 text-emerald-700' :
+                        promptHealth.status === 'Good' ? 'bg-blue-100 text-blue-700' :
+                        'bg-amber-100 text-amber-700'
+                      }`}
+                    >
+                      Prompt Health {promptHealth.score}/100 · {promptHealth.status}
+                    </span>
+                  )}
                   {directorEngine !== 'unknown' && (
-                    <span className="text-gray-500">Lần chạy gần nhất: {directorEngine === 'gemini' ? 'Gemini' : 'Local'}</span>
+                    <span className="text-gray-500">
+                      {directorEngine === 'gemini'
+                        ? 'Lần chạy gần nhất: Gemini'
+                        : directorFallbackReason === 'overload'
+                        ? 'Gemini đang tạm thời quá tải — Local Fallback'
+                        : 'Gemini/API chưa khả dụng — Local Fallback'}
+                    </span>
                   )}
                 </div>
 
@@ -706,7 +723,21 @@ const App: React.FC = () => {
               {/* Prompt Output */}
               <div ref={promptRef} className="neu-flat p-6 flex flex-col relative">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-2xl font-bold text-gray-700 neu-text-shadow">Prompt Output</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-2xl font-bold text-gray-700 neu-text-shadow">Prompt Output</h2>
+                    {promptHealth && (
+                      <span
+                        title={promptHealth.summary}
+                        className={`text-xs px-2.5 py-1 rounded-full font-bold transition-all ${
+                          promptHealth.status === 'Excellent' ? 'bg-emerald-100 text-emerald-700' :
+                          promptHealth.status === 'Good' ? 'bg-blue-100 text-blue-700' :
+                          'bg-amber-100 text-amber-700'
+                        }`}
+                      >
+                        {promptHealth.score}/100 · {promptHealth.status}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex gap-3">
                      <button 
                       onClick={() => copyToClipboard(generatedPrompt)}

@@ -1,6 +1,6 @@
 {
   "name": "Suno Prompt Workstation 2026 v4",
-  "description": "Semantic idea-to-prompt workstation for Suno Custom Mode with Gemini/Local engine status, confidence-aware AI Music Director, coherent tag orchestration, lyrics support, and Advanced Options recommendations.",
+  "description": "Semantic idea-to-prompt workstation for Suno Custom Mode with V4.2 Semantic Validator, Primary Intent Lock, Prompt Quality Engine, Prompt Health scoring, and Gemini/Local fallback reliability.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

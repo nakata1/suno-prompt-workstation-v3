@@ -2,6 +2,7 @@
 // Logic ported from original JS and typed
 import { CategoryKey } from './types';
 import { genres, instruments, moods, vocals, structure, effects, production, v5Advanced, mixingPresets, animeDrama, v5Performance } from './data';
+import { derivePrimaryIntent, validateSelectionsWithIntent, PrimaryIntent } from './semanticValidator';
 
 // Helper to convert File to Base64 for Gemini API
 const fileToBase64 = (file: File): Promise<string> => {
@@ -18,19 +19,125 @@ const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
+interface SafeApiResult<T = any> {
+  ok: boolean;
+  status: number;
+  data: T | null;
+  text: string | null;
+  isJson: boolean;
+  isOverloaded: boolean;
+  error?: string;
+}
+
+/**
+ * Hardened client-side fetch helper for all /api/gemini/* endpoints.
+ *
+ * Requirements enforced:
+ * 1. Checks response.ok
+ * 2. Inspects Content-Type: only calls response.json() when Content-Type indicates application/json
+ * 3. Reads response.text() safely for HTML / non-JSON responses to prevent SyntaxError: Unexpected token '<'
+ * 4. Treats HTML / non-JSON responses as API/server transport failures
+ * 5. Accurately flags transient 429/503 overload states so the caller can activate Local Fallback cleanly
+ */
+async function safeFetchGeminiApi<T = any>(
+  endpoint: string,
+  body: unknown
+): Promise<SafeApiResult<T>> {
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    const contentType = res.headers.get('content-type') || '';
+    const isJson = contentType.toLowerCase().includes('application/json');
+
+    if (!isJson) {
+      // Safely read response as text; NEVER call response.json() on HTML or non-JSON
+      const text = await res.text().catch(() => '');
+      const isOverloaded = res.status === 429 || res.status === 503 ||
+        /overloaded|service unavailable|rate limit/i.test(text);
+
+      console.warn(
+        `[Gemini Transport] Non-JSON response from ${endpoint} (HTTP ${res.status}, Content-Type: "${contentType}"). Gracefully falling back.`
+      );
+
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        text,
+        isJson: false,
+        isOverloaded,
+        error: `Server returned non-JSON response (HTTP ${res.status})`
+      };
+    }
+
+    // Response is JSON: parse safely
+    let parsed: any = null;
+    try {
+      parsed = await res.json();
+    } catch (parseError) {
+      console.warn(`[Gemini Transport] Failed to parse JSON from ${endpoint}:`, parseError);
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        text: null,
+        isJson: false,
+        isOverloaded: res.status === 429 || res.status === 503,
+        error: 'Invalid JSON payload'
+      };
+    }
+
+    const isOverloaded = res.status === 429 || res.status === 503 ||
+      parsed?.transient === true || parsed?.code === 429 ||
+      (parsed?.code === 503 && parsed?.transient !== false);
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        data: parsed,
+        text: null,
+        isJson: true,
+        isOverloaded,
+        error: parsed?.error || `HTTP ${res.status}`
+      };
+    }
+
+    return {
+      ok: true,
+      status: res.status,
+      data: parsed as T,
+      text: null,
+      isJson: true,
+      isOverloaded: false
+    };
+  } catch (networkError: any) {
+    console.warn(`[Gemini Transport] Network or connection error calling ${endpoint}:`, networkError);
+    return {
+      ok: false,
+      status: 0,
+      data: null,
+      text: null,
+      isJson: false,
+      isOverloaded: false,
+      error: networkError?.message || 'Network error'
+    };
+  }
+}
+
 export const analyzeImageSim = async (file: File): Promise<{ topic: string; tags: string[] }> => {
   try {
     const base64Data = await fileToBase64(file);
-    const res = await fetch('/api/gemini/analyze-image', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ base64Data, mimeType: file.type || 'image/jpeg' })
+    const res = await safeFetchGeminiApi<{ topic?: string; tags?: string[] }>('/api/gemini/analyze-image', {
+      base64Data,
+      mimeType: file.type || 'image/jpeg'
     });
-    if (res.ok) {
-      const json = await res.json();
-      if (json.topic && Array.isArray(json.tags)) {
-        return { topic: json.topic, tags: json.tags };
-      }
+    if (res.ok && res.data?.topic && Array.isArray(res.data.tags)) {
+      return { topic: res.data.topic, tags: res.data.tags };
     }
   } catch (error) {
     console.warn("Server Gemini Vision API failed, falling back to simulation:", error);
@@ -189,14 +296,9 @@ export const generateLyricsSim = async (topic: string, style: string, lang: stri
 // These proxy requests to the backend server which holds the Gemini API key securely.
 export const optimizePromptAI = async (input: string): Promise<string> => {
   try {
-    const res = await fetch('/api/gemini/optimize-prompt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.result) return data.result;
+    const res = await safeFetchGeminiApi<{ result?: string }>('/api/gemini/optimize-prompt', { input });
+    if (res.ok && res.data?.result) {
+      return res.data.result;
     }
   } catch (error) {
     console.warn('Gemini idea optimization failed; using fallback:', error);
@@ -206,14 +308,9 @@ export const optimizePromptAI = async (input: string): Promise<string> => {
 
 export const generatePromptAI = async (input: string): Promise<string> => {
   try {
-    const res = await fetch('/api/gemini/generate-prompt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.result) return data.result;
+    const res = await safeFetchGeminiApi<{ result?: string }>('/api/gemini/generate-prompt', { input });
+    if (res.ok && res.data?.result) {
+      return res.data.result;
     }
   } catch (error) {
     console.warn('Gemini Suno prompt generation failed; using fallback:', error);
@@ -223,14 +320,9 @@ export const generatePromptAI = async (input: string): Promise<string> => {
 
 export const generateLyricsAI = async (topic: string, style: string, lang: string): Promise<string> => {
   try {
-    const res = await fetch('/api/gemini/generate-lyrics', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, style, lang })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.lyrics) return data.lyrics;
+    const res = await safeFetchGeminiApi<{ lyrics?: string }>('/api/gemini/generate-lyrics', { topic, style, lang });
+    if (res.ok && res.data?.lyrics) {
+      return res.data.lyrics;
     }
   } catch (error) {
     console.warn('Gemini lyrics generation failed; using fallback:', error);
@@ -248,6 +340,9 @@ export interface MusicDirectorResult {
   confidence: number;
   engine: 'gemini' | 'local';
   model?: string;
+  primaryIntent?: PrimaryIntent;
+  coherenceScore?: number;
+  fallbackReason?: 'overload' | 'unavailable';
 }
 
 const flattenTagKeys = (map: any): string[] => {
@@ -326,16 +421,25 @@ const musicDirectorFallback = (input: string, isOverloaded: boolean = false): Mu
 
   addFirstAvailable('structure', ['Verse-Chorus', 'Intro-Verse-Chorus-Verse-Chorus-Bridge-Chorus-Outro']);
   const confidence = mythicMetal ? 0.78 : (Object.keys(selections).length >= 3 ? 0.72 : 0.58);
+  const cd = optimizePromptSim(input);
+  const rawClean = sanitizeDirectorSelections(selections);
+  const intent = derivePrimaryIntent(input, cd, rawClean);
+  const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent);
+
+  const fallbackReason: 'overload' | 'unavailable' = isOverloaded ? 'overload' : 'unavailable';
   const rationale = isOverloaded
     ? 'Gemini đang tạm thời quá tải, đã chuyển sang Local Fallback. Bộ thẻ được chọn bằng semantic rules cục bộ.'
     : 'Đang dùng Local Fallback vì Gemini/API chưa khả dụng. Bộ thẻ được chọn bằng semantic rules cục bộ.';
 
   return {
-    creativeDirection: optimizePromptSim(input),
-    selections: sanitizeDirectorSelections(selections),
+    creativeDirection: cd,
+    selections: validatedSelections,
     rationale,
     confidence,
-    engine: 'local'
+    engine: 'local',
+    primaryIntent: intent,
+    coherenceScore: Math.round(confidence * 100),
+    fallbackReason
   };
 };
 
@@ -343,38 +447,31 @@ export const runMusicDirectorAI = async (input: string): Promise<MusicDirectorRe
   const catalog = Object.fromEntries((Object.keys(allowedTags) as CategoryKey[]).map(k => [k, allowedTags[k]]));
   let isOverloaded = false;
   try {
-    const res = await fetch('/api/gemini/music-director', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input, catalog })
-    });
-    if (res.ok) {
-      const parsed = await res.json();
+    const res = await safeFetchGeminiApi<any>('/api/gemini/music-director', { input, catalog });
+    if (res.ok && res.data) {
+      const parsed = res.data;
       const creativeDirection = typeof parsed.creativeDirection === 'string' && parsed.creativeDirection.trim()
         ? parsed.creativeDirection.trim()
         : optimizePromptSim(input);
-      const cleanSelections = sanitizeDirectorSelections(parsed.selections);
+      const rawClean = sanitizeDirectorSelections(parsed.selections);
+      const intent = derivePrimaryIntent(input, creativeDirection, rawClean);
+      const { validatedSelections } = validateSelectionsWithIntent(rawClean, intent);
       const rationale = typeof parsed.rationale === 'string' ? parsed.rationale.trim() : 'Đã chọn bộ thẻ cân bằng cho ý tưởng này.';
       const confidence = Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.8)));
       return {
         creativeDirection,
-        selections: cleanSelections,
+        selections: validatedSelections,
         rationale,
         confidence,
-        engine: parsed.engine === 'gemini' ? 'gemini' : 'gemini',
-        model: typeof parsed.model === 'string' ? parsed.model : undefined
+        engine: 'gemini',
+        model: typeof parsed.model === 'string' ? parsed.model : undefined,
+        primaryIntent: intent,
+        coherenceScore: Math.round(confidence * 100)
       };
     }
 
-    try {
-      const errData = await res.json();
-      if (errData?.transient === true || errData?.code === 429 || (errData?.code === 503 && errData?.transient !== false)) {
-        isOverloaded = true;
-      }
-    } catch {
-      if (res.status === 429 || res.status === 503) {
-        isOverloaded = true;
-      }
+    if (res.isOverloaded) {
+      isOverloaded = true;
     }
   } catch (error) {
     console.warn('Gemini Music Director failed; using fallback:', error);
