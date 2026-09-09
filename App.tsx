@@ -5,7 +5,13 @@ import {
   v5Advanced, mixingPresets, structureTemplates, animeDrama, v5Performance
 } from './data';
 import { SelectionState, CategoryKey } from './types';
-import { composeSunoStylePrompt, recommendSunoSettings, buildSunoExportPack, SunoModelProfile } from './sunoAdapter';
+import {
+  compileSunoPrompt,
+  recommendSunoSettings,
+  buildSunoExportPack,
+  SunoModelProfile,
+  SunoCompiledPrompt
+} from './sunoPromptCompiler';
 import { analyzeImageSim, optimizePromptAI, generateLyricsAI, suggestTagsSim, generatePromptAI, runMusicDirectorAI } from './simulation';
 import { createEmptySelections, evaluatePromptHealth, PromptHealthResult, buildMusicBlueprint } from './semanticValidator';
 import { BlueprintVisualizer } from './BlueprintVisualizer';
@@ -39,6 +45,7 @@ const App: React.FC = () => {
   const [aiInput, setAiInput] = useState('');
   const [optimizedIdea, setOptimizedIdea] = useState('');
   const [generatedPrompt, setGeneratedPrompt] = useState('');
+  const [compiledSuno, setCompiledSuno] = useState<SunoCompiledPrompt | null>(null);
   const [sunoModelProfile, setSunoModelProfile] = useState<SunoModelProfile>('auto');
   const [isDirecting, setIsDirecting] = useState(false);
   const [directorNote, setDirectorNote] = useState('');
@@ -107,15 +114,20 @@ const App: React.FC = () => {
     return buildMusicIntentProfile(currentText, activeBlueprint, selections, src, conf, reason);
   }, [aiInput, optimizedIdea, activeBlueprint, selections, directorEngine, directorConfidence, directorFallbackReason]);
 
-  const sunoSettings = recommendSunoSettings(aiInput || optimizedIdea, selections, sunoModelProfile, activeBlueprint);
+  const sunoSettings = useMemo(() => {
+    if (compiledSuno?.settings) return compiledSuno.settings;
+    return recommendSunoSettings(aiInput || optimizedIdea, selections, sunoModelProfile, activeBlueprint);
+  }, [compiledSuno, aiInput, optimizedIdea, selections, sunoModelProfile, activeBlueprint]);
 
-  // Update prompt whenever selections, optimized idea, or activeIntentProfile change
+  // Update prompt whenever selections, optimized idea, or activeIntentProfile change (Suno Prompt Compiler V2)
   useEffect(() => {
-    const blueprint = buildMusicBlueprint(aiInput);
-    const prompt = composeSunoStylePrompt(aiInput, optimizedIdea, selections, sunoModelProfile, blueprint);
-    setGeneratedPrompt(prompt);
-    setPromptHealth(evaluatePromptHealth(aiInput, optimizedIdea, selections, prompt, blueprint, activeIntentProfile || undefined));
-  }, [selections, optimizedIdea, aiInput, sunoModelProfile, activeIntentProfile]);
+    const rawInput = (aiInput || optimizedIdea || '').trim();
+    const blueprint = activeBlueprint;
+    const compiled = compileSunoPrompt(rawInput, optimizedIdea, selections, sunoModelProfile, blueprint, activeIntentProfile || undefined);
+    setCompiledSuno(compiled);
+    setGeneratedPrompt(compiled.stylePrompt);
+    setPromptHealth(evaluatePromptHealth(rawInput, optimizedIdea, selections, compiled.stylePrompt, blueprint, activeIntentProfile || undefined, compiled));
+  }, [selections, optimizedIdea, aiInput, sunoModelProfile, activeBlueprint, activeIntentProfile]);
 
   // Helpers
   const showFeedback = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {

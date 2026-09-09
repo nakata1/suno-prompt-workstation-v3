@@ -231,7 +231,9 @@ export const buildMusicBlueprint = (rawInput: string): MusicBlueprint => {
     addRequired('Electric Guitar');
   }
 
-  if (/\b(?:war\s*drums|trống\s*trận)\b/i.test(lower) && !exclusionsProfile.excludeHeavyDrums) {
+  if (/\b(?:frame\s*drum|soft\s*frame\s*drum)\b/i.test(lower) && !exclusionsProfile.excludeDrums) {
+    addRequired('Soft Frame Drum');
+  } else if (/\b(?:war\s*drums|trống\s*trận)\b/i.test(lower) && !exclusionsProfile.excludeHeavyDrums) {
     addRequired('War Drums');
   } else if (/\b(?:taiko)\b/i.test(lower)) {
     addRequired('Taiko');
@@ -240,6 +242,11 @@ export const buildMusicBlueprint = (rawInput: string): MusicBlueprint => {
   } else if (/\b(?:drums?|trống|drum\s*kit)\b/i.test(lower) && !exclusionsProfile.excludeDrums && !exclusionsProfile.excludeHeavyDrums) {
     addRequired('Drum Kit');
   }
+
+  if (/\bnyckelharpa\b/i.test(lower)) addRequired('Nyckelharpa');
+  if (/\bhardanger\s*fiddle\b/i.test(lower)) addRequired('Hardanger Fiddle');
+  if (/\b(?:wooden\s*flutes?)\b/i.test(lower)) addRequired('Wooden Flutes');
+  if (/\b(?:atmospheric\s*drones?|drones?)\b/i.test(lower)) addRequired('Atmospheric Drones');
 
   if (/\b(?:choir|hợp\s*xướng)\b/i.test(lower)) {
     addRequired('Choir');
@@ -377,10 +384,13 @@ export const buildMusicBlueprint = (rawInput: string): MusicBlueprint => {
     primaryStyle = 'Vietnamese V-Pop acoustic ballad';
     secondaryStyles.push('Acoustic Ballad', 'V-Pop', 'Singer-Songwriter');
   }
-  // CASE B: Nordic Symphonic Folk Metal
+  // CASE B: Nordic Symphonic Folk Metal or Nordic Folk Ambient
   else if (culturalContext.includes('Nordic') && /\b(?:metal|folk\s*metal|symphonic)\b/i.test(lower) && !exclusionsProfile.excludeMetal) {
     primaryStyle = 'Nordic symphonic folk metal';
     secondaryStyles.push('Symphonic Metal', 'Folk Metal', 'Epic Orchestral');
+  } else if (culturalContext.includes('Nordic') && /\b(?:folk|ambient)\b/i.test(lower)) {
+    primaryStyle = 'Nordic folk ambient track';
+    secondaryStyles.push('Nordic Folk', 'Ambient', 'Cinematic Folk');
   }
   // CASE C: Modern Festival Future Bass EDM
   else if (/\b(?:future\s*bass|festival|edm)\b/i.test(lower) && !exclusionsProfile.excludeEdm) {

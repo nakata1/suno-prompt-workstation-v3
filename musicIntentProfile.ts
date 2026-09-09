@@ -55,7 +55,9 @@ const extractExplicitPositiveElements = (
     add('Electric Guitar');
   }
 
-  if (/\b(?:war\s*drums|trống\s*trận|trống\s*chiến)\b/i.test(lower) && !exclusions.excludeWarDrums && !exclusions.excludeHeavyDrums && !exclusions.excludeDrums) {
+  if (/\b(?:frame\s*drum|soft\s*frame\s*drum)\b/i.test(lower) && !exclusions.excludeDrums) {
+    add('Soft Frame Drum');
+  } else if (/\b(?:war\s*drums|trống\s*trận|trống\s*chiến)\b/i.test(lower) && !exclusions.excludeWarDrums && !exclusions.excludeHeavyDrums && !exclusions.excludeDrums) {
     add('War Drums');
   } else if (/\b(?:taiko)\b/i.test(lower) && !exclusions.excludeDrums) {
     add('Taiko');
@@ -64,6 +66,11 @@ const extractExplicitPositiveElements = (
   } else if (/\b(?:drum\s*kit|trống|bộ\s*trống)\b/i.test(lower) && !exclusions.excludeDrums && !exclusions.excludeHeavyDrums) {
     add('Drum Kit');
   }
+
+  if (/\bnyckelharpa\b/i.test(lower)) add('Nyckelharpa');
+  if (/\bhardanger\s*fiddle\b/i.test(lower)) add('Hardanger Fiddle');
+  if (/\b(?:wooden\s*flutes?)\b/i.test(lower)) add('Wooden Flutes');
+  if (/\b(?:atmospheric\s*drones?|drones?)\b/i.test(lower)) add('Atmospheric Drones');
 
   if (/\b(?:choir|hợp\s*xướng)\b/i.test(lower) && !exclusions.excludeChoir && !exclusions.excludeVocals) {
     add('Choir');

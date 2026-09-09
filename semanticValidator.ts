@@ -14,6 +14,7 @@ import {
   VocalAuthorityAnalysis,
   VocalAuthorityType,
 } from './vocalAuthority';
+import { SunoCompiledPrompt } from './sunoPromptCompiler';
 
 export { buildUserIntentProfile, applyQualityEngine, hasExplicitSupport, isTagExcluded, extractExclusions };
 export { buildMusicBlueprint, validateAgainstBlueprint, buildMusicIntentProfile };
@@ -525,11 +526,17 @@ export const validateSelectionsWithIntent = (
 };
 
 /**
- * Deterministic Prompt Health V3 Evaluator:
- * Calculates a 0-100 quality score and status without calling Gemini.
- * Evaluates Blueprint fidelity, tag density, primary intent alignment, unsupported strong additions,
- * era drift, vocal contradiction, explicit instrument omission, arrangement progression,
- * and language leakage.
+ * Deterministic Prompt Health V3 Evaluator (V4.6 Engine):
+ * Evaluates the FINAL COMPILED OUTPUT, not merely selected tags.
+ * Checks:
+ * - Authority preservation (Instrumental, Female, Male, Mixed/Duet)
+ * - Negative constraint compliance (Negative constraints MUST win)
+ * - Vocal consistency & Instrumental consistency
+ * - Semantic deduplication
+ * - Genre coherence & Instrumentation coherence
+ * - Excessive prompt density
+ * Critical authority violations heavily reduce the score; a 100/100 score
+ * is strictly impossible if any authoritative constraint is violated.
  */
 export const evaluatePromptHealth = (
   idea: string,
@@ -537,18 +544,22 @@ export const evaluatePromptHealth = (
   selections: SelectionState,
   promptText: string,
   inputBlueprint?: MusicBlueprint,
-  inputIntentProfile?: MusicIntentProfile
+  inputIntentProfile?: MusicIntentProfile,
+  compiledResult?: SunoCompiledPrompt
 ): PromptHealthResult => {
   let score = 95;
   const reasons: string[] = [];
-  const profile = buildUserIntentProfile(idea);
-  const blueprint = inputBlueprint || buildMusicBlueprint(idea);
-  const intent = derivePrimaryIntent(idea, optimizedIdea, selections, profile, blueprint);
+  let hasCriticalAuthorityViolation = false;
+
+  const rawText = (idea || optimizedIdea || '').trim();
+  const profile = buildUserIntentProfile(rawText);
+  const blueprint = inputBlueprint || buildMusicBlueprint(rawText);
+  const intent = derivePrimaryIntent(rawText, optimizedIdea, selections, profile, blueprint);
 
   const totalTags = Object.values(selections).reduce((acc, list) => acc + list.length, 0);
 
   // 1. Tag Density & Completeness
-  if (totalTags === 0) {
+  if (totalTags === 0 && !promptText.trim()) {
     return {
       score: 40,
       status: 'Needs Review',
@@ -557,7 +568,7 @@ export const evaluatePromptHealth = (
     };
   }
 
-  if (selections.genres.length === 0) {
+  if (selections.genres.length === 0 && !blueprint.primaryStyle) {
     score -= 15;
     reasons.push('Thiếu thể loại chủ đạo');
   } else if (selections.genres.length >= 1 && selections.genres.length <= 3) {
@@ -565,25 +576,25 @@ export const evaluatePromptHealth = (
     reasons.push('Thể loại chủ đạo được định hình rõ ràng');
   }
 
-  if (selections.moods.length === 0) {
+  if (selections.moods.length === 0 && blueprint.moods.length === 0) {
     score -= 10;
     reasons.push('Thiếu định hướng tâm trạng/cảm xúc');
   }
 
-  if (selections.instruments.length === 0) {
+  if (selections.instruments.length === 0 && blueprint.instruments.required.length === 0) {
     score -= 10;
     reasons.push('Chưa chỉ định nhạc cụ đặc trưng');
   }
 
-  if (totalTags > 16) {
+  if (totalTags > 18) {
     score -= 12;
     reasons.push('Mật độ thẻ quá dày có thể làm loãng định hướng của Suno');
-  } else if (totalTags >= 4 && totalTags <= 12) {
+  } else if (totalTags >= 4 && totalTags <= 14) {
     score += 5;
     reasons.push('Mật độ thẻ cân đối, tập trung vào bản sắc bài hát');
   }
 
-  const promptLower = promptText.toLowerCase();
+  const promptLower = (promptText || '').toLowerCase();
 
   // 2. Blueprint Primary Style Fidelity & Alignment
   const hasStyleMismatch =
@@ -592,9 +603,10 @@ export const evaluatePromptHealth = (
     (blueprint.primaryStyle.includes('EDM') && /acoustic folk|unplugged/i.test(promptLower));
 
   if (hasStyleMismatch) {
-    score -= 20;
+    score -= 25;
+    hasCriticalAuthorityViolation = true;
     reasons.push(`Lệch phong cách chủ đạo Blueprint: phát hiện yếu tố xung đột với "${blueprint.primaryStyle}"`);
-  } else {
+  } else if (blueprint.primaryStyle) {
     score += 5;
     reasons.push(`Bám sát phong cách chủ đạo Blueprint: ${blueprint.primaryStyle}`);
   }
@@ -620,48 +632,56 @@ export const evaluatePromptHealth = (
     }
   }
 
-  // 5. Vocal Fidelity & Contradiction Guard (Authoritative Vocal Enforcement)
-  const vocalAuth = determineVocalAuthority(idea, blueprint, profile);
+  // 5. Authoritative Vocal Enforcement (Prompt Health V3)
+  const vocalAuth = determineVocalAuthority(rawText, blueprint, profile);
   if (vocalAuth.authority === 'instrumental') {
+    const unauthorizedVocalRegex = /(?<!(?:without|no|zero)\s+(?:lead\s+)?)\b(?:vocals?|singing|choirs?|vocal\s+hooks?|vocal\s+chops?|vocal\s+textures?|female\s+vocal|(?<!fe)male\s+vocal)\b/i;
     const hasVocalTags = selections.vocals.length > 0;
-    const hasVocalText = /(?<!no\s+|without\s+|zero\s+)vocals?|\bsinging\b|\bchoir\b/i.test(promptLower) &&
-      !/instrumental composition without lead vocals/i.test(promptLower);
-    if (hasVocalTags || hasVocalText) {
-      score -= 30;
-      reasons.push('Xung đột: Yêu cầu định dạng không lời (Instrumental) nhưng xuất hiện yếu tố giọng hát');
+    const hasVocalInCompiled = unauthorizedVocalRegex.test(promptLower);
+
+    if (hasVocalTags || hasVocalInCompiled) {
+      hasCriticalAuthorityViolation = true;
+      score -= 50;
+      reasons.push('XUNG ĐỘT THẨM QUYỀN: Yêu cầu định dạng không lời (Instrumental) nhưng xuất hiện yếu tố giọng hát trong prompt xuất bản');
     } else {
       score += 5;
-      reasons.push('Bảo toàn chuẩn xác định dạng không lời (Instrumental)');
+      reasons.push('Bảo toàn tuyệt đối thẩm quyền không lời (Instrumental Authority: Strictly no vocals)');
     }
   } else if (vocalAuth.authority === 'female') {
+    const maleVocalRegex = /\b(?<!fe)male\s*(?:vocals?|voice|hooks?|lead|singer)\b/i;
     const hasMaleTag = selections.vocals.some(v => /(?<!fe)male|\bnam\b/i.test(v));
-    const hasMaleText = /(?<!fe)male\s*(?:vocal|voice|hooks?)|deep\s+male/i.test(promptLower);
-    if (hasMaleTag || hasMaleText) {
-      score -= 30;
-      reasons.push('Xung đột giọng hát: Người dùng/Blueprint yêu cầu giọng nữ (Female Vocal) nhưng xuất hiện giọng nam');
+    const hasMaleInCompiled = maleVocalRegex.test(promptLower);
+
+    if (hasMaleTag || hasMaleInCompiled) {
+      hasCriticalAuthorityViolation = true;
+      score -= 50;
+      reasons.push('XUNG ĐỘT THẨM QUYỀN: Người dùng yêu cầu giọng nữ (Female Vocal) nhưng xuất hiện giọng nam trong prompt');
     } else {
       score += 5;
       reasons.push('Bảo toàn chuẩn xác thẩm quyền giọng nữ (Female Vocal Authority)');
     }
   } else if (vocalAuth.authority === 'male') {
+    const femaleVocalRegex = /\bfemale\s*(?:vocals?|voice|hooks?|lead|singer)\b/i;
     const hasFemaleTag = selections.vocals.some(v => /female|\bnữ\b|\bnu\b/i.test(v));
-    const hasFemaleText = /female\s*(?:vocal|voice|hooks?)|airy\s+female/i.test(promptLower);
-    if (hasFemaleTag || hasFemaleText) {
-      score -= 30;
-      reasons.push('Xung đột giọng hát: Người dùng/Blueprint yêu cầu giọng nam (Male Vocal) nhưng xuất hiện giọng nữ');
+    const hasFemaleInCompiled = femaleVocalRegex.test(promptLower);
+
+    if (hasFemaleTag || hasFemaleInCompiled) {
+      hasCriticalAuthorityViolation = true;
+      score -= 50;
+      reasons.push('XUNG ĐỘT THẨM QUYỀN: Người dùng yêu cầu giọng nam (Male Vocal) nhưng xuất hiện giọng nữ trong prompt');
     } else {
       score += 5;
       reasons.push('Bảo toàn chuẩn xác thẩm quyền giọng nam (Male Vocal Authority)');
     }
   } else if (vocalAuth.authority === 'mixed') {
     score += 5;
-    reasons.push('Bảo toàn chuẩn xác định dạng song ca / hợp xướng đa giọng (Duet / Mixed)');
+    reasons.push('Bảo toàn chuẩn xác định dạng song ca / hợp xướng đa giọng (Duet / Mixed Vocal Authority)');
   } else if (blueprint.vocals.gender !== 'unspecified') {
     score += 5;
     reasons.push(`Bảo toàn chuẩn xác giọng hát: ${blueprint.vocals.gender}`);
   }
 
-  // 6. Explicit Required Instrument Omission Guard
+  // 6. Explicit Required Instrument Preservation Guard
   if (blueprint.instruments.required.length > 0) {
     const missing = blueprint.instruments.required.filter(inst => {
       const instL = inst.toLowerCase();
@@ -691,46 +711,96 @@ export const evaluatePromptHealth = (
     }
   }
 
-  // 8. Language Leakage into English prompt
+  // 8. Negative Constraint & Exclusion Compliance Guard (Major Contradiction)
+  // Negative constraints MUST win.
+  const exclusionsToCheck: { label: string; regex: RegExp }[] = [];
+
+  if (profile.exclusions.excludeSynthesizer) {
+    exclusionsToCheck.push({
+      label: 'synthesizer/synths',
+      regex: /(?<!(?:without|no|zero)\s+)\b(?:electronic\s+synths?|synthesizers?|synths?|synth\s+pads?)\b/i
+    });
+  }
+  if (profile.exclusions.excludeHeavyDrums || profile.exclusions.excludeDrums) {
+    exclusionsToCheck.push({
+      label: 'heavy drums',
+      regex: /(?<!(?:without|no|zero)\s+)\b(?:heavy\s+drums?|aggressive\s+drums?|war\s+drums?|808\s+kick)\b/i
+    });
+  }
+  if (profile.exclusions.excludeElectricGuitar) {
+    exclusionsToCheck.push({
+      label: 'electric guitar',
+      regex: /(?<!(?:without|no|zero)\s+)\b(?:electric\s+guitars?|distorted\s+guitars?)\b/i
+    });
+  }
+  if (profile.exclusions.excludeAcousticGuitar) {
+    exclusionsToCheck.push({
+      label: 'acoustic guitar',
+      regex: /(?<!(?:without|no|zero)\s+)\bacoustic\s+guitars?\b/i
+    });
+  }
+  if (profile.exclusions.excludeRock || profile.exclusions.excludeMetal) {
+    exclusionsToCheck.push({
+      label: 'rock/metal',
+      regex: /(?<!(?:without|no|zero)\s+)\b(?:heavy\s+metal|metal|hard\s+rock)\b/i
+    });
+  }
+
+  // Check generic excluded keywords
+  (profile.exclusions.excludedKeywords || []).forEach(kw => {
+    if (kw.length >= 3) {
+      exclusionsToCheck.push({
+        label: kw,
+        regex: new RegExp(`(?<!(?:without|no|zero)\\s+(?:lead\\s+)?)\\b${kw}\\b`, 'i')
+      });
+    }
+  });
+
+  const breachedExclusions: string[] = [];
+  exclusionsToCheck.forEach(item => {
+    if (item.regex.test(promptLower)) {
+      if (!breachedExclusions.includes(item.label)) {
+        breachedExclusions.push(item.label);
+      }
+    }
+  });
+
+  if (breachedExclusions.length > 0) {
+    hasCriticalAuthorityViolation = true;
+    score -= 50;
+    reasons.push(`XUNG ĐỘT LOẠI TRỪ NGHIÊM TRỌNG: Yếu tố người dùng đã loại trừ ("${breachedExclusions.join(', ')}") xuất hiện trong prompt xuất bản`);
+  } else if (exclusionsToCheck.length > 0) {
+    score += 5;
+    reasons.push('Tuân thủ nghiêm ngặt mọi ràng buộc loại trừ (Negative Constraints)');
+  }
+
+  // 9. Semantic Deduplication & Diagnostics Evaluation
+  if (compiledResult?.diagnostics) {
+    if (compiledResult.diagnostics.removedDuplicates.length > 0) {
+      score += 3;
+      reasons.push(`Trình biên dịch V2 đã tự động hợp nhất ${compiledResult.diagnostics.removedDuplicates.length} từ khóa trùng lặp`);
+    }
+    if (compiledResult.diagnostics.blockedConflicts.length > 0) {
+      reasons.push(`Bộ bảo vệ xung đột cuối (Final Conflict Guard) đã chặn thành công ${compiledResult.diagnostics.blockedConflicts.length} xung đột muộn`);
+    }
+  }
+
+  // 10. Language Leakage Guard
   const vietnameseLeakRegex = /\b(bài hát về|lời bài hát|giọng nam|giọng nữ|đoạn cao trào|điệp khúc|mở đầu|kết thúc|không lời|tiếng việt|nhạc mộc)\b/i;
   if (vietnameseLeakRegex.test(promptText)) {
     score -= 15;
     reasons.push('Phát hiện rò rỉ cụm từ tiếng Việt vào prompt phong cách tiếng Anh');
   } else {
-    score += 5;
+    score += 3;
     reasons.push('Ngôn ngữ prompt tiếng Anh chuẩn xác, không rò rỉ thuật ngữ');
   }
 
-  // 9. Negation & Exclusion Contradiction Guard (Major Contradiction)
-  const allExclusions = Array.from(new Set([...profile.exclusions.excludedKeywords, ...blueprint.exclusions.map(e => e.toLowerCase())]));
-  if (allExclusions.length > 0) {
-    const leakedExclusions: string[] = [];
-    allExclusions.forEach(kw => {
-      if (kw.length >= 3) {
-        const inPrompt = promptLower.split(/[,.\s]+/).some(token => token === kw) || (promptLower.includes(kw) && !promptLower.includes(`no ${kw}`) && !promptLower.includes(`without ${kw}`));
-        const inSelections = Object.values(selections).flat().some(t => {
-          const tLower = t.toLowerCase();
-          return tLower === kw || tLower.includes(kw);
-        });
-        if (inPrompt || inSelections) {
-          if (!leakedExclusions.includes(kw)) leakedExclusions.push(kw);
-        }
-      }
-    });
-    if (leakedExclusions.length > 0) {
-      score -= 30;
-      reasons.push(`Xung đột nghiêm trọng: Yếu tố người dùng đã loại trừ ("${leakedExclusions.join(', ')}") vẫn xuất hiện trong bản phối.`);
-    }
-  }
-
-  // Intent Profile Conflicts & Resolutions
+  // 11. Intent Profile Resolutions
   if (inputIntentProfile) {
     if (inputIntentProfile.conflicts && inputIntentProfile.conflicts.length > 0) {
-      // If there are conflicts detected
       inputIntentProfile.conflicts.forEach(conflict => {
-        reasons.push(`Phát hiện xung đột ý định: ${conflict} (Đã xử lý theo thứ tự ưu tiên V4.5)`);
+        reasons.push(`Phát hiện xung đột ý định: ${conflict} (Đã xử lý theo thứ tự ưu tiên V4.6)`);
       });
-      // If the conflict was automatically resolved and respected in final prompt
       if (inputIntentProfile.conflictResolutions && inputIntentProfile.conflictResolutions.length > 0) {
         score += 2;
         reasons.push('Xung đột ý định đã được giải quyết tất định theo quy tắc ưu tiên');
@@ -743,25 +813,30 @@ export const evaluatePromptHealth = (
 
   // Blueprint Completeness Reward
   if (blueprint.confidence >= 0.75) {
-    score += 5;
+    score += 4;
     reasons.push(`Music Blueprint đạt độ tin cậy cao (${Math.round(blueprint.confidence * 100)}%)`);
   }
 
-  // Clamp score between 0 and 100
-  const finalScore = Math.max(0, Math.min(100, score));
+  // CRITICAL RULE: A 100/100 score must NOT be possible if any authoritative constraint is violated.
+  let finalScore = Math.max(0, Math.min(100, score));
+  if (hasCriticalAuthorityViolation) {
+    finalScore = Math.min(55, finalScore);
+  }
 
   let status: 'Excellent' | 'Good' | 'Needs Review';
   let summary: string;
 
   if (finalScore >= 90) {
     status = 'Excellent';
-    summary = `Bản phối có độ nhất quán cao theo chuẩn "${intent.label}", cấu trúc hài hòa và trung thực với yêu cầu.`;
+    summary = `Bản phối đạt độ chuẩn xác cao theo "${intent.label}", tuân thủ tuyệt đối thẩm quyền người dùng và âm học Suno V2.`;
   } else if (finalScore >= 75) {
     status = 'Good';
     summary = `Bản phối có định hướng tốt theo "${intent.label}", đáp ứng các chỉ tiêu âm nhạc chính.`;
   } else {
     status = 'Needs Review';
-    summary = 'Cần rà soát lại để loại bỏ lệch thể loại, xung đột giọng hát hoặc nhạc cụ bị bỏ sót.';
+    summary = hasCriticalAuthorityViolation
+      ? 'Phát hiện vi phạm thẩm quyền âm nhạc hoặc ràng buộc loại trừ cốt lõi!'
+      : 'Cần rà soát lại để hoàn thiện mật độ thẻ hoặc bổ sung nhạc cụ đặc trưng.';
   }
 
   return {
