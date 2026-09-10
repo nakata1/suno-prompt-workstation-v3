@@ -9,9 +9,12 @@ import {
   compileSunoPrompt,
   recommendSunoSettings,
   buildSunoExportPack,
+  buildSunoPackage,
   SunoModelProfile,
-  SunoCompiledPrompt
+  SunoCompiledPrompt,
+  SunoPackage
 } from './sunoPromptCompiler';
+import { SunoPackageInspector } from './SunoPackageInspector';
 import { analyzeImageSim, optimizePromptAI, generateLyricsAI, suggestTagsSim, generatePromptAI, runMusicDirectorAI } from './simulation';
 import { createEmptySelections, evaluatePromptHealth, PromptHealthResult, buildMusicBlueprint } from './semanticValidator';
 import { BlueprintVisualizer } from './BlueprintVisualizer';
@@ -128,6 +131,14 @@ const App: React.FC = () => {
     setGeneratedPrompt(compiled.stylePrompt);
     setPromptHealth(evaluatePromptHealth(rawInput, optimizedIdea, selections, compiled.stylePrompt, blueprint, activeIntentProfile || undefined, compiled));
   }, [selections, optimizedIdea, aiInput, sunoModelProfile, activeBlueprint, activeIntentProfile]);
+
+  const sunoPackage = useMemo(() => {
+    if (!compiledSuno) return null;
+    const source: 'gemini' | 'local' = directorEngine === 'gemini' ? 'gemini' : 'local';
+    const healthScore = promptHealth?.score ?? 95;
+    const confidenceScore = directorConfidence !== null ? directorConfidence : Math.round(activeBlueprint.confidence * 100);
+    return buildSunoPackage(compiledSuno, source, healthScore, confidenceScore);
+  }, [compiledSuno, directorEngine, promptHealth, directorConfidence, activeBlueprint]);
 
   // Helpers
   const showFeedback = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -826,6 +837,14 @@ const App: React.FC = () => {
                   <Copy size={16} /> Sao chép gói Suno hoàn chỉnh
                 </button>
               </div>
+
+              {/* Suno Package Inspector (V4.7) */}
+              {sunoPackage && (
+                <SunoPackageInspector
+                  pkg={sunoPackage}
+                  onCopyFeedback={(msg) => showFeedback(msg)}
+                />
+              )}
 
               {/* Lyrics Generator with V5 Controls */}
               <div className="neu-flat p-6">

@@ -144,17 +144,18 @@ export const buildMusicBlueprint = (rawInput: string): MusicBlueprint => {
     explicitRequirements.push('Instrumental (no vocals)');
   } else {
     // Vocal gender
-    if (/\b(?:song\s*ca|duet|nam\s*nữ|nam\s*nu|both\s*male\s*and\s*female|male\s*(?:and|&)\s*female|female\s*(?:and|&)\s*male|mixed\s*vocals?)\b/i.test(lower)) {
+    if (/\b(?:song\s*ca|duet|nam\s*nữ|nam\s*nu|both\s*male\s*and\s*female|male\s*(?:and|&)\s*female|female\s*(?:and|&)\s*male|mixed\s*vocals?)\b/i.test(lower) ||
+        (/\bfemale\b/i.test(lower) && /\b(?<!fe)male\b/i.test(lower))) {
       presence = 'vocal';
       gender = 'mixed';
       explicitRequirements.push('Duet / Mixed vocals');
-    } else if (/\b(?:giọng\s*nữ|giong\s*nu|vocal\s*nữ|nữ\s*hát|female\s*vocal|female\s*voice|female\s*hook)\b/i.test(lower)) {
+    } else if (/\b(?:giọng\s*nữ|giong\s*nu|vocal\s*nữ|nữ\s*hát|female\s*vocals?|female\s*voice|female\s*hooks?|female\s*singer|\bfemale\b)\b/i.test(lower)) {
       if (!exclusionsProfile.excludeFemaleVocal) {
         presence = 'vocal';
         gender = 'female';
         explicitRequirements.push('Female vocal');
       }
-    } else if (/\b(?:giọng\s*nam|giong\s*nam|vocal\s*nam|nam\s*hát|(?<!fe)male\s*vocal|(?<!fe)male\s*voice)\b/i.test(lower)) {
+    } else if (/\b(?:giọng\s*nam|giong\s*nam|vocal\s*nam|nam\s*hát|(?<!fe)male\s*vocals?|(?<!fe)male\s*voice|(?<!fe)male\s*singer|\b(?<!fe)male\b)\b/i.test(lower)) {
       if (!exclusionsProfile.excludeMaleVocal) {
         presence = 'vocal';
         gender = 'male';

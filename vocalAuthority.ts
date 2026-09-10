@@ -46,11 +46,11 @@ export const determineVocalAuthority = (
 
   const isExplicitFemale =
     !exclusions.excludeFemaleVocal &&
-    /\b(?:giọng\s*nữ|giong\s*nu|vocal\s*nữ|vocal\s*nu|nữ\s*hát|nu\s*hat|female\s*vocals?|female\s*voice|female\s*hooks?|female\s*lead)\b/i.test(positiveText);
+    /\b(?:giọng\s*nữ|giong\s*nu|vocal\s*nữ|vocal\s*nu|nữ\s*hát|nu\s*hat|female\s*vocals?|female\s*voice|female\s*hooks?|female\s*lead|female\s*singer|\bfemale\b)\b/i.test(positiveText);
 
   const isExplicitMale =
     !exclusions.excludeMaleVocal &&
-    /\b(?:giọng\s*nam|giong\s*nam|vocal\s*nam|nam\s*hát|nam\s*hat|(?<!fe)male\s*vocals?|(?<!fe)male\s*voice|(?<!fe)male\s*lead)\b/i.test(positiveText);
+    /\b(?:giọng\s*nam|giong\s*nam|vocal\s*nam|nam\s*hát|nam\s*hat|(?<!fe)male\s*vocals?|(?<!fe)male\s*voice|(?<!fe)male\s*lead|(?<!fe)male\s*singer|\b(?<!fe)male\b)\b/i.test(positiveText);
 
   // Extract explicit vocal textures (only when associated with voice, avoiding instruments like deep sub-bass)
   const textures: string[] = [];
@@ -73,7 +73,7 @@ export const determineVocalAuthority = (
     };
   }
 
-  if (isExplicitDuet) {
+  if (isExplicitDuet || (isExplicitFemale && isExplicitMale)) {
     return {
       authority: 'mixed',
       explicitSource: 'user_prompt',

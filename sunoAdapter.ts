@@ -4,20 +4,26 @@ import {
   compileSunoPrompt,
   recommendSunoSettings,
   buildSunoExportPack,
+  buildSunoPackage,
+  formatFullSunoPackageText,
   SunoCompiledPrompt,
   SunoModelProfile,
-  SunoSettingsRecommendation
+  SunoSettingsRecommendation,
+  SunoPackage
 } from './sunoPromptCompiler';
 
 export {
   compileSunoPrompt,
   recommendSunoSettings,
-  buildSunoExportPack
+  buildSunoExportPack,
+  buildSunoPackage,
+  formatFullSunoPackageText
 };
 export type {
   SunoCompiledPrompt,
   SunoModelProfile,
-  SunoSettingsRecommendation
+  SunoSettingsRecommendation,
+  SunoPackage
 };
 
 /**

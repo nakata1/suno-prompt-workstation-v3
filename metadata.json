@@ -1,6 +1,6 @@
 {
   "name": "Suno Prompt Workstation 2026 v4",
-  "description": "Semantic idea-to-prompt workstation for Suno Custom Mode with V4.6 Suno Prompt Compiler V2, Blueprint Visualizer + Intent Inspector, Authoritative Music Intent Profile, Deterministic Conflict Guard, and robust Gemini/Local fallback.",
+  "description": "Semantic idea-to-prompt workstation for Suno Custom Mode with V4.7 Suno Package Inspector & Safe Export Layer, V4.6 Suno Prompt Compiler V2, Blueprint Visualizer + Intent Inspector, Authoritative Music Intent Profile, Deterministic Conflict Guard, and robust Gemini/Local fallback.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

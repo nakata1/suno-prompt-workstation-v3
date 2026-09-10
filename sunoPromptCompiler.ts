@@ -189,10 +189,8 @@ export const applyFinalConflictGuard = (
 
   // 1. Vocal Constraint Guard
   if (vocalAuth.authority === 'instrumental') {
-    // Protect authoritative negative vocal phrasing like "without lead vocals" or "no lead vocals"
-    const token = '___WITHOUT_LEAD_VOCALS___';
-    sanitized = sanitized.replace(/without\s+lead\s+vocals/gi, token);
-    sanitized = sanitized.replace(/no\s+(?:lead\s+)?vocals?/gi, token);
+    // Strip negative vocal wording like "without lead vocals", "no lead vocals", "no vocals", "without vocals"
+    sanitized = sanitized.replace(/\b(?:without|no|zero)\s+(?:lead\s+)?(?:vocals?|singing)\b/gi, '');
 
     // Strip unauthorized vocal references (compound phrases first)
     const vocalRegex = /\b(?:featuring|with|led by)?\s*(?:ethereal|expressive|emotive|warm|airy|clear|deep)?\s*(?:female|(?<!fe)male|lead|backing)?\s*(?:vocal\s+textures?|vocal\s+hooks?|vocal\s+chops?|vocals?|singers?|singing|choirs?)\b/gi;
@@ -206,8 +204,6 @@ export const applyFinalConflictGuard = (
       sanitized = sanitized.replace(/Vocal character:[^.]+\.\s*/gi, '');
     }
 
-    // Restore protected negative vocal token
-    sanitized = sanitized.replace(new RegExp(token, 'g'), 'without lead vocals');
     diagnostics.preservedAuthorities.push('Instrumental Authority: Strictly no vocals');
   } else if (vocalAuth.authority === 'female') {
     // Block male vocal leakage (make sure not matching 'female')
@@ -332,7 +328,7 @@ export const compileSunoExclude = (
 
   // Vocal Authority negative constraints
   if (vocalAuth.authority === 'instrumental') {
-    excludeList.push('vocals', 'singing', 'choir', 'lead vocal');
+    excludeList.push('vocals', 'singing', 'choir', 'lead vocal', 'lead vocals');
   } else if (vocalAuth.authority === 'female') {
     excludeList.push('male vocal');
   } else if (vocalAuth.authority === 'male') {
@@ -442,8 +438,8 @@ export const compileVocalGuide = (
   blueprint: MusicBlueprint,
   profile?: UserIntentProfile
 ): string => {
-  if (vocalAuth.authority === 'instrumental') {
-    return 'Instrumental composition — no lead vocals.';
+  if (vocalAuth.authority === 'instrumental' || blueprint.vocals.presence === 'instrumental') {
+    return '';
   }
 
   if (vocalAuth.authority === 'mixed') {
@@ -697,7 +693,7 @@ export const compileSunoPrompt = (
 
   // 6.4. Vocal Character
   if (vocalAuth.authority === 'instrumental' || cleanSelections.structure.includes('Instrumental')) {
-    sentences.push('Instrumental composition without lead vocals, emphasizing expressive melodic phrasing');
+    sentences.push('Instrumental composition emphasizing expressive melodic phrasing');
   } else if (vocalAuth.authority === 'female') {
     const rawChars = blueprint.vocals.character.length
       ? blueprint.vocals.character
@@ -803,6 +799,28 @@ export const buildSunoPackageText = (compiled: SunoCompiledPrompt, lyrics: strin
   return sections.join('\n');
 };
 
+export interface SunoPackage {
+  stylePrompt: string;
+  exclude: string;
+  arrangement: string;
+  vocalGuide: string;
+  productionGuide: string;
+  settings: {
+    weirdness?: number;
+    styleInfluence?: number;
+    duration?: string;
+    model?: string;
+  };
+  diagnostics?: {
+    source: 'gemini' | 'local';
+    promptHealth: number;
+    confidence?: number;
+    preservedAuthorities: string[];
+    blockedConflicts: string[];
+    removedDuplicates: string[];
+  };
+}
+
 export const buildSunoExportPack = (
   stylePrompt: string,
   lyrics: string,
@@ -819,5 +837,89 @@ export const buildSunoExportPack = (
     `Exclude: ${settings.exclude || '(none)'}`,
     '', settings.note
   ].join('\n');
+};
+
+/**
+ * Builds the authoritative, downstream SunoPackage structure for inspector & export.
+ */
+export const buildSunoPackage = (
+  compiled: SunoCompiledPrompt,
+  source: 'gemini' | 'local' = 'local',
+  promptHealth: number = 95,
+  confidence?: number
+): SunoPackage => {
+  const isInstrumental =
+    !compiled.vocalGuide ||
+    /instrumental/i.test(compiled.diagnostics.preservedAuthorities?.join(' ') || '') ||
+    compiled.stylePrompt.includes('Instrumental composition');
+
+  return {
+    stylePrompt: compiled.stylePrompt,
+    exclude: compiled.excludePrompt,
+    arrangement: compiled.arrangementGuide,
+    vocalGuide: isInstrumental ? '' : compiled.vocalGuide,
+    productionGuide: compiled.productionGuide,
+    settings: {
+      weirdness: compiled.settings.weirdness,
+      styleInfluence: compiled.settings.styleInfluence,
+      duration: `~${compiled.settings.durationMinutes} min`,
+      model: compiled.settings.model || 'Latest / Auto',
+    },
+    diagnostics: {
+      source,
+      promptHealth,
+      confidence,
+      preservedAuthorities: Array.from(new Set(compiled.diagnostics.preservedAuthorities || [])),
+      blockedConflicts: Array.from(new Set(compiled.diagnostics.blockedConflicts || [])),
+      removedDuplicates: Array.from(new Set(compiled.diagnostics.removedDuplicates || [])),
+    }
+  };
+};
+
+/**
+ * Produces clean text export for "Copy Full Suno Package" without leaking internal diagnostics.
+ */
+export const formatFullSunoPackageText = (pkg: SunoPackage): string => {
+  const sections: string[] = [];
+
+  if (pkg.stylePrompt && pkg.stylePrompt.trim()) {
+    sections.push(`STYLE PROMPT:\n${pkg.stylePrompt.trim()}`);
+  }
+
+  if (pkg.exclude && pkg.exclude.trim()) {
+    sections.push(`EXCLUDE:\n${pkg.exclude.trim()}`);
+  }
+
+  if (pkg.arrangement && pkg.arrangement.trim()) {
+    sections.push(`ARRANGEMENT:\n${pkg.arrangement.trim()}`);
+  }
+
+  if (pkg.vocalGuide && pkg.vocalGuide.trim()) {
+    sections.push(`VOCAL:\n${pkg.vocalGuide.trim()}`);
+  }
+
+  if (pkg.productionGuide && pkg.productionGuide.trim()) {
+    sections.push(`PRODUCTION:\n${pkg.productionGuide.trim()}`);
+  }
+
+  const settingsLines: string[] = ['SETTINGS:'];
+  if (pkg.settings.weirdness !== undefined) {
+    settingsLines.push(`Weirdness: ${pkg.settings.weirdness}%`);
+  }
+  if (pkg.settings.styleInfluence !== undefined) {
+    settingsLines.push(`Style Influence: ${pkg.settings.styleInfluence}%`);
+  }
+  if (pkg.settings.duration) {
+    settingsLines.push(`Duration: ${pkg.settings.duration}`);
+  }
+  if (pkg.settings.model) {
+    settingsLines.push(`Model: ${pkg.settings.model}`);
+  }
+
+  if (settingsLines.length > 1) {
+    sections.push(settingsLines.join('\n'));
+  }
+
+  return sections.join('\n\n');
 };
 
