@@ -22,6 +22,18 @@ import {
   registerSunoModelProfile,
   CURRENT_RECOMMENDED_SUNO_MODEL
 } from './sunoModelRegistry';
+import {
+  adaptPromptForSunoModel,
+  adaptStylePromptForModel,
+  adaptExcludeForModel,
+  adaptArrangementForModel,
+  adaptVocalGuideForModel,
+  adaptProductionGuideForModel,
+  validateSemanticEquivalence,
+  SunoPromptAdapterContext,
+  SunoAdaptedPrompt,
+  SunoAdapterDiagnostics
+} from './sunoPromptAdapter';
 
 export {
   compileSunoPrompt,
@@ -36,14 +48,24 @@ export {
   isLegacySunoModel,
   clampModelDuration,
   registerSunoModelProfile,
-  CURRENT_RECOMMENDED_SUNO_MODEL
+  CURRENT_RECOMMENDED_SUNO_MODEL,
+  adaptPromptForSunoModel,
+  adaptStylePromptForModel,
+  adaptExcludeForModel,
+  adaptArrangementForModel,
+  adaptVocalGuideForModel,
+  adaptProductionGuideForModel,
+  validateSemanticEquivalence
 };
 export type {
   SunoCompiledPrompt,
   SunoModelId,
   SunoModelProfile,
   SunoSettingsRecommendation,
-  SunoPackage
+  SunoPackage,
+  SunoPromptAdapterContext,
+  SunoAdaptedPrompt,
+  SunoAdapterDiagnostics
 };
 
 /**

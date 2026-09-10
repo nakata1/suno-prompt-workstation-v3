@@ -24,9 +24,15 @@ import {
   resolveSunoModelProfile,
   clampModelDuration
 } from './sunoModelRegistry';
+import {
+  adaptPromptForSunoModel,
+  SunoPromptAdapterContext,
+  SunoAdaptedPrompt,
+  SunoAdapterDiagnostics
+} from './sunoPromptAdapter';
 
-export type { SunoModelId, SunoModelProfile };
-export { resolveSunoModelProfile, clampModelDuration };
+export type { SunoModelId, SunoModelProfile, SunoPromptAdapterContext, SunoAdaptedPrompt, SunoAdapterDiagnostics };
+export { resolveSunoModelProfile, clampModelDuration, adaptPromptForSunoModel };
 
 export interface SunoSettingsRecommendation {
   model: string;
@@ -829,6 +835,7 @@ export interface SunoPackage {
     preservedAuthorities: string[];
     blockedConflicts: string[];
     removedDuplicates: string[];
+    adapter?: SunoAdapterDiagnostics;
   };
 }
 
@@ -852,29 +859,48 @@ export const buildSunoExportPack = (
 
 /**
  * Builds the authoritative, downstream SunoPackage structure for inspector & export.
+ * Seamlessly integrates the Model-Aware Prompt Adapter (V4.9).
  */
 export const buildSunoPackage = (
   compiled: SunoCompiledPrompt,
   source: 'gemini' | 'local' = 'local',
   promptHealth: number = 95,
-  confidence?: number
+  confidence?: number,
+  modelProfileInput?: SunoModelId
 ): SunoPackage => {
+  const modelId = modelProfileInput || compiled.settings?.model || 'auto';
+  const resolvedModel = resolveSunoModelProfile(modelId);
+
   const isInstrumental =
     !compiled.vocalGuide ||
     /instrumental/i.test(compiled.diagnostics.preservedAuthorities?.join(' ') || '') ||
     compiled.stylePrompt.includes('Instrumental composition');
 
-  return {
+  // Authoritative inputs to the Model-Aware Prompt Adapter (V4.9)
+  const adapterContext: SunoPromptAdapterContext = {
+    modelProfile: resolvedModel,
     stylePrompt: compiled.stylePrompt,
     exclude: compiled.excludePrompt,
     arrangement: compiled.arrangementGuide,
     vocalGuide: isInstrumental ? '' : compiled.vocalGuide,
     productionGuide: compiled.productionGuide,
+    isInstrumental
+  };
+
+  // Run model adaptation with semantic equivalence guard
+  const adapted = adaptPromptForSunoModel(adapterContext);
+
+  return {
+    stylePrompt: adapted.stylePrompt,
+    exclude: adapted.exclude,
+    arrangement: adapted.arrangement,
+    vocalGuide: adapted.vocalGuide,
+    productionGuide: adapted.productionGuide,
     settings: {
       weirdness: compiled.settings.weirdness,
       styleInfluence: compiled.settings.styleInfluence,
       duration: `~${compiled.settings.durationMinutes} min`,
-      model: compiled.settings.model || 'Latest / Auto',
+      model: resolvedModel.label,
     },
     diagnostics: {
       source,
@@ -883,6 +909,7 @@ export const buildSunoPackage = (
       preservedAuthorities: Array.from(new Set(compiled.diagnostics.preservedAuthorities || [])),
       blockedConflicts: Array.from(new Set(compiled.diagnostics.blockedConflicts || [])),
       removedDuplicates: Array.from(new Set(compiled.diagnostics.removedDuplicates || [])),
+      adapter: adapted.diagnostics
     }
   };
 };

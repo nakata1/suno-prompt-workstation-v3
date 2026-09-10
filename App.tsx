@@ -143,8 +143,15 @@ const App: React.FC = () => {
     const source: 'gemini' | 'local' = directorEngine === 'gemini' ? 'gemini' : 'local';
     const healthScore = promptHealth?.score ?? 95;
     const confidenceScore = directorConfidence !== null ? directorConfidence : Math.round(activeBlueprint.confidence * 100);
-    return buildSunoPackage(compiledSuno, source, healthScore, confidenceScore);
-  }, [compiledSuno, directorEngine, promptHealth, directorConfidence, activeBlueprint]);
+    return buildSunoPackage(compiledSuno, source, healthScore, confidenceScore, sunoModelProfile);
+  }, [compiledSuno, directorEngine, promptHealth, directorConfidence, activeBlueprint, sunoModelProfile]);
+
+  // Sync generated style prompt with model-adapted presentation
+  useEffect(() => {
+    if (sunoPackage?.stylePrompt) {
+      setGeneratedPrompt(sunoPackage.stylePrompt);
+    }
+  }, [sunoPackage?.stylePrompt]);
 
   // Helpers
   const showFeedback = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {
