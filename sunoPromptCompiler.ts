@@ -18,8 +18,15 @@ import {
   VocalAuthorityAnalysis,
   sanitizeSelectionsByVocalAuthority
 } from './vocalAuthority';
+import {
+  SunoModelId,
+  SunoModelProfile,
+  resolveSunoModelProfile,
+  clampModelDuration
+} from './sunoModelRegistry';
 
-export type SunoModelProfile = 'auto' | 'v5.5';
+export type { SunoModelId, SunoModelProfile };
+export { resolveSunoModelProfile, clampModelDuration };
 
 export interface SunoSettingsRecommendation {
   model: string;
@@ -527,7 +534,7 @@ export const compileProductionGuide = (
 export const recommendSunoSettings = (
   idea: string,
   selections: SelectionState,
-  modelProfile: SunoModelProfile = 'auto',
+  modelProfile: SunoModelId = 'auto',
   inputBlueprint?: MusicBlueprint
 ): SunoSettingsRecommendation => {
   const rawInput = (idea || '').trim();
@@ -562,6 +569,10 @@ export const recommendSunoSettings = (
     durationMinutes = 3.6;
   }
 
+  // Defensive duration capability guard (V4.8)
+  const safeDuration = clampModelDuration(modelProfile, durationMinutes);
+  const resolvedModel = resolveSunoModelProfile(modelProfile);
+
   const excludePrompt = compileSunoExclude(
     rawInput,
     blueprint,
@@ -571,10 +582,10 @@ export const recommendSunoSettings = (
   );
 
   return {
-    model: modelProfile === 'v5.5' ? 'v5.5' : 'Latest / Auto',
+    model: resolvedModel.label,
     weirdness,
     styleInfluence,
-    durationMinutes,
+    durationMinutes: safeDuration,
     exclude: excludePrompt,
     note: 'Các giá trị là điểm khởi đầu đề xuất. Sau khi nghe bản đầu tiên, tăng Style Influence nếu Suno đi lệch phong cách; tăng Weirdness nếu kết quả quá an toàn hoặc lặp lại.'
   };
@@ -588,7 +599,7 @@ export const compileSunoPrompt = (
   idea: string,
   optimizedIdea: string,
   selections: SelectionState,
-  modelProfile: SunoModelProfile = 'auto',
+  modelProfile: SunoModelId = 'auto',
   inputBlueprint?: MusicBlueprint,
   inputIntentProfile?: MusicIntentProfile
 ): SunoCompiledPrompt => {

@@ -10,10 +10,15 @@ import {
   recommendSunoSettings,
   buildSunoExportPack,
   buildSunoPackage,
+  SunoModelId,
   SunoModelProfile,
   SunoCompiledPrompt,
   SunoPackage
 } from './sunoPromptCompiler';
+import {
+  getAvailableSunoModels,
+  resolveSunoModelProfile
+} from './sunoModelRegistry';
 import { SunoPackageInspector } from './SunoPackageInspector';
 import { analyzeImageSim, optimizePromptAI, generateLyricsAI, suggestTagsSim, generatePromptAI, runMusicDirectorAI } from './simulation';
 import { createEmptySelections, evaluatePromptHealth, PromptHealthResult, buildMusicBlueprint } from './semanticValidator';
@@ -49,7 +54,8 @@ const App: React.FC = () => {
   const [optimizedIdea, setOptimizedIdea] = useState('');
   const [generatedPrompt, setGeneratedPrompt] = useState('');
   const [compiledSuno, setCompiledSuno] = useState<SunoCompiledPrompt | null>(null);
-  const [sunoModelProfile, setSunoModelProfile] = useState<SunoModelProfile>('auto');
+  const [sunoModelProfile, setSunoModelProfile] = useState<SunoModelId>('auto');
+  const activeModelProfile = useMemo(() => resolveSunoModelProfile(sunoModelProfile), [sunoModelProfile]);
   const [isDirecting, setIsDirecting] = useState(false);
   const [directorNote, setDirectorNote] = useState('');
   const [directorEngine, setDirectorEngine] = useState<'gemini' | 'local' | 'unknown'>('unknown');
@@ -808,17 +814,26 @@ const App: React.FC = () => {
 
               {/* Suno Current / Next-gen Settings Recommendation */}
               <div className="neu-flat p-6">
-                <div className="flex justify-between items-center mb-4 gap-3">
+                <div className="flex justify-between items-center mb-3 gap-3">
                   <h2 className="text-xl font-bold text-gray-700 flex items-center gap-2"><Sliders size={20} /> Suno Settings</h2>
                   <select
                     value={sunoModelProfile}
-                    onChange={(e) => setSunoModelProfile(e.target.value as SunoModelProfile)}
+                    onChange={(e) => setSunoModelProfile(e.target.value as SunoModelId)}
                     className="neu-input px-3 py-2 text-sm font-bold"
                   >
-                    <option value="auto">Latest / Auto</option>
-                    <option value="v5.5">v5.5</option>
+                    {getAvailableSunoModels().map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
+                {activeModelProfile?.description && (
+                  <div className="text-xs text-purple-700 font-medium mb-3 px-1 flex items-center gap-1.5">
+                    <Sparkles size={13} className="text-purple-500 shrink-0" />
+                    <span>{activeModelProfile.description}</span>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className="neu-pressed p-3"><div className="text-gray-400 text-xs font-bold uppercase">Weirdness</div><div className="text-lg font-extrabold text-purple-600">{sunoSettings.weirdness}%</div></div>
                   <div className="neu-pressed p-3"><div className="text-gray-400 text-xs font-bold uppercase">Style Influence</div><div className="text-lg font-extrabold text-purple-600">{sunoSettings.styleInfluence}%</div></div>

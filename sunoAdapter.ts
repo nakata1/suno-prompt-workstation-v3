@@ -7,20 +7,40 @@ import {
   buildSunoPackage,
   formatFullSunoPackageText,
   SunoCompiledPrompt,
+  SunoModelId,
   SunoModelProfile,
   SunoSettingsRecommendation,
   SunoPackage
 } from './sunoPromptCompiler';
+import {
+  resolveSunoModelProfile,
+  getSunoModelProfile,
+  getSunoModelCapabilities,
+  getAvailableSunoModels,
+  isLegacySunoModel,
+  clampModelDuration,
+  registerSunoModelProfile,
+  CURRENT_RECOMMENDED_SUNO_MODEL
+} from './sunoModelRegistry';
 
 export {
   compileSunoPrompt,
   recommendSunoSettings,
   buildSunoExportPack,
   buildSunoPackage,
-  formatFullSunoPackageText
+  formatFullSunoPackageText,
+  resolveSunoModelProfile,
+  getSunoModelProfile,
+  getSunoModelCapabilities,
+  getAvailableSunoModels,
+  isLegacySunoModel,
+  clampModelDuration,
+  registerSunoModelProfile,
+  CURRENT_RECOMMENDED_SUNO_MODEL
 };
 export type {
   SunoCompiledPrompt,
+  SunoModelId,
   SunoModelProfile,
   SunoSettingsRecommendation,
   SunoPackage
@@ -34,7 +54,7 @@ export const composeSunoStylePrompt = (
   idea: string,
   optimizedIdea: string,
   selections: SelectionState,
-  modelProfile: SunoModelProfile = 'auto',
+  modelProfile: SunoModelId = 'auto',
   inputBlueprint?: MusicBlueprint
 ): string => {
   const result = compileSunoPrompt(idea, optimizedIdea, selections, modelProfile, inputBlueprint);
