@@ -13,9 +13,11 @@ import { SelectionState, CategoryKey } from './types';
 
 export type VocalAuthorityType = 'instrumental' | 'female' | 'male' | 'mixed' | 'unspecified';
 
+export type VocalAuthoritySource = 'user_prompt' | 'user_selections' | 'blueprint' | 'intent_profile' | 'unspecified';
+
 export interface VocalAuthorityAnalysis {
   authority: VocalAuthorityType;
-  explicitSource: 'user_prompt' | 'blueprint' | 'intent_profile' | 'unspecified';
+  explicitSource: VocalAuthoritySource;
   allowFemale: boolean;
   allowMale: boolean;
   allowVocals: boolean;
@@ -25,12 +27,13 @@ export interface VocalAuthorityAnalysis {
 
 /**
  * Deterministically determines vocal authority following the strict hierarchy:
- * EXPLICIT USER VOCAL CONSTRAINT > MUSIC INTENT BLUEPRINT > AI INFERENCE > GENRE DEFAULTS > GENERIC DEFAULTS
+ * EXPLICIT USER VOCAL CONSTRAINT > UI SELECTIONS > MUSIC INTENT BLUEPRINT > AI INFERENCE > GENRE DEFAULTS > GENERIC DEFAULTS
  */
 export const determineVocalAuthority = (
   rawInput: string,
   blueprint?: MusicBlueprint,
-  profile?: UserIntentProfile
+  profile?: UserIntentProfile,
+  selections?: SelectionState | Partial<Record<CategoryKey, string[]>>
 ): VocalAuthorityAnalysis => {
   const inputLower = (rawInput || '').toLowerCase();
   const exclusions = extractExclusions(rawInput || '');
@@ -39,7 +42,7 @@ export const determineVocalAuthority = (
   // 1. EXPLICIT USER VOCAL CONSTRAINT (Raw Input & Exclusions)
   const isExplicitInstrumental =
     exclusions.excludeVocals ||
-    /\b(?:không\s+(?:lời|vocal|hát)|khong\s+(?:loi|vocal|hat)|nhạc\s+không\s+lời|nhac\s+khong\s+loi|instrumental|no\s+vocals?|without\s+vocals?|zero\s+vocals?)\b/i.test(inputLower);
+    /\b(?:không\s+(?:lời|vocal|hát)|khong\s+(?:loi|vocal|hat)|nhạc\s+không\s+lời|nhac\s+khong\s+loi|instrumental|no\s+vocals?|without\s+vocals?|zero\s+vocals?|no\s+singing|without\s+singing)\b/i.test(inputLower);
 
   const isExplicitDuet =
     /\b(?:song\s*ca|duet|nam\s*nữ|nam\s*nu|both\s*male\s*and\s*female|male\s*(?:and|&)\s*female|female\s*(?:and|&)\s*male|mixed\s*vocals?)\b/i.test(positiveText);
@@ -107,6 +110,65 @@ export const determineVocalAuthority = (
       isInstrumental: false,
       textures,
     };
+  }
+
+  // 1.5. EXPLICIT UI SELECTIONS (when user explicitly picks tags in the UI)
+  if (selections) {
+    const selectedVocals = selections.vocals || [];
+    const hasFemaleSelection = selectedVocals.some(v => /female|nữ/i.test(v));
+    const hasMaleSelection = selectedVocals.some(v => /(?<!fe)male|nam/i.test(v));
+    const hasDuetSelection = selectedVocals.some(v => /duet|song\s*ca|mixed/i.test(v));
+    const hasInstrumentalSelection =
+      (selections.structure || []).some(s => /không\s+lời|instrumental/i.test(s)) ||
+      (selections.v5Advanced || []).some(s => /không\s+lời|instrumental/i.test(s));
+
+    if (hasInstrumentalSelection && !hasFemaleSelection && !hasMaleSelection && !hasDuetSelection) {
+      return {
+        authority: 'instrumental',
+        explicitSource: 'user_selections',
+        allowFemale: false,
+        allowMale: false,
+        allowVocals: false,
+        isInstrumental: true,
+        textures: [],
+      };
+    }
+
+    if (hasDuetSelection || (hasFemaleSelection && hasMaleSelection)) {
+      return {
+        authority: 'mixed',
+        explicitSource: 'user_selections',
+        allowFemale: true,
+        allowMale: true,
+        allowVocals: true,
+        isInstrumental: false,
+        textures,
+      };
+    }
+
+    if (hasFemaleSelection && !hasMaleSelection) {
+      return {
+        authority: 'female',
+        explicitSource: 'user_selections',
+        allowFemale: true,
+        allowMale: false,
+        allowVocals: true,
+        isInstrumental: false,
+        textures,
+      };
+    }
+
+    if (hasMaleSelection && !hasFemaleSelection) {
+      return {
+        authority: 'male',
+        explicitSource: 'user_selections',
+        allowFemale: false,
+        allowMale: true,
+        allowVocals: true,
+        isInstrumental: false,
+        textures,
+      };
+    }
   }
 
   // 2. MUSIC INTENT BLUEPRINT
@@ -239,6 +301,14 @@ export const sanitizeSelectionsByVocalAuthority = <T extends Partial<Record<Cate
       }
     });
     return result;
+  }
+
+  // Non-instrumental vocal authority: strictly purge any conflicting instrumental tags
+  if (Array.isArray(result.structure)) {
+    result.structure = result.structure.filter((t: string) => !/instrumental|không\s*lời/i.test(t));
+  }
+  if (Array.isArray(result.v5Advanced)) {
+    result.v5Advanced = result.v5Advanced.filter((t: string) => !/instrumental|không\s*lời/i.test(t));
   }
 
   if (vocalAuth.authority === 'female') {

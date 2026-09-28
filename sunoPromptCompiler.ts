@@ -343,9 +343,9 @@ export const compileSunoExclude = (
   if (vocalAuth.authority === 'instrumental') {
     excludeList.push('vocals', 'singing', 'choir', 'lead vocal', 'lead vocals');
   } else if (vocalAuth.authority === 'female') {
-    excludeList.push('male vocal');
+    excludeList.push('male vocal', 'male lead vocals', 'duet', 'choir');
   } else if (vocalAuth.authority === 'male') {
-    excludeList.push('female vocal');
+    excludeList.push('female vocal', 'female lead vocals', 'duet', 'choir');
   }
 
   // Synthesizer exclusions
@@ -372,8 +372,8 @@ export const compileSunoExclude = (
 
   // Domain-smart defaults for pristine acoustic styles
   const positiveHay = `${profile.exclusions.positiveText} ${Object.values(selections).flat().join(' ')}`.toLowerCase();
-  if (/acoustic|folk|ballad|piano/.test(positiveHay) || blueprint.primaryStyle.includes('ballad')) {
-    excludeList.push('harsh distortion', 'overly busy drums');
+  if (/acoustic|folk|ballad|piano|pop/.test(positiveHay) || blueprint.primaryStyle.includes('ballad') || blueprint.primaryStyle.includes('pop')) {
+    excludeList.push('heavy distortion', 'harsh distortion', 'aggressive rock', 'overly busy drums');
   }
   if (/cinematic|orchestral|classical/.test(positiveHay) || blueprint.primaryStyle.includes('orchestral')) {
     excludeList.push('cheap synth presets');
@@ -546,7 +546,7 @@ export const recommendSunoSettings = (
   const rawInput = (idea || '').trim();
   const profile = buildUserIntentProfile(rawInput);
   const blueprint = inputBlueprint || buildMusicBlueprint(rawInput);
-  const vocalAuth = determineVocalAuthority(rawInput, blueprint, profile);
+  const vocalAuth = determineVocalAuthority(rawInput, blueprint, profile, selections);
   const positiveHay = `${profile.exclusions.positiveText} ${selections.structure.join(' ')} ${selections.moods.join(' ')} ${selections.genres.join(' ')}`.toLowerCase();
 
   let weirdness = 42;
@@ -620,7 +620,7 @@ export const compileSunoPrompt = (
   const profile = buildUserIntentProfile(rawInput);
   const blueprint = inputBlueprint || buildMusicBlueprint(rawInput);
   const intentProfile = inputIntentProfile || buildMusicIntentProfile(rawInput, blueprint, selections);
-  const vocalAuth = determineVocalAuthority(rawInput, blueprint, profile);
+  const vocalAuth = determineVocalAuthority(rawInput, blueprint, profile, selections);
   const cleanSelections = sanitizeSelectionsByVocalAuthority(selections, vocalAuth);
 
   // 1. Compile Exclude
@@ -709,7 +709,7 @@ export const compileSunoPrompt = (
   }
 
   // 6.4. Vocal Character
-  if (vocalAuth.authority === 'instrumental' || cleanSelections.structure.includes('Instrumental')) {
+  if (vocalAuth.authority === 'instrumental' || (cleanSelections.structure.includes('Instrumental') && vocalAuth.authority !== 'female' && vocalAuth.authority !== 'male' && vocalAuth.authority !== 'mixed')) {
     sentences.push('Instrumental composition emphasizing expressive melodic phrasing');
   } else if (vocalAuth.authority === 'female') {
     const rawChars = blueprint.vocals.character.length
@@ -871,10 +871,14 @@ export const buildSunoPackage = (
   const modelId = modelProfileInput || compiled.settings?.model || 'auto';
   const resolvedModel = resolveSunoModelProfile(modelId);
 
+  const hasVocalPresence =
+    Boolean(compiled.vocalGuide && compiled.vocalGuide.trim()) ||
+    /female\s+(?:vocal|hooks?)|male\s+vocal|duet|singer/i.test(compiled.stylePrompt);
+
   const isInstrumental =
-    !compiled.vocalGuide ||
-    /instrumental/i.test(compiled.diagnostics.preservedAuthorities?.join(' ') || '') ||
-    compiled.stylePrompt.includes('Instrumental composition');
+    !hasVocalPresence &&
+    (/instrumental/i.test(compiled.diagnostics.preservedAuthorities?.join(' ') || '') ||
+     compiled.stylePrompt.includes('Instrumental composition'));
 
   // Authoritative inputs to the Model-Aware Prompt Adapter (V4.9)
   const adapterContext: SunoPromptAdapterContext = {

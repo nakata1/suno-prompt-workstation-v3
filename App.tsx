@@ -10,10 +10,12 @@ import {
   recommendSunoSettings,
   buildSunoExportPack,
   buildSunoPackage,
+  formatFullSunoPackageText,
   SunoModelId,
   SunoModelProfile,
   SunoCompiledPrompt,
-  SunoPackage
+  SunoPackage,
+  SunoSettingsRecommendation
 } from './sunoPromptCompiler';
 import {
   getAvailableSunoModels,
@@ -52,8 +54,6 @@ const App: React.FC = () => {
   });
   const [aiInput, setAiInput] = useState('');
   const [optimizedIdea, setOptimizedIdea] = useState('');
-  const [generatedPrompt, setGeneratedPrompt] = useState('');
-  const [compiledSuno, setCompiledSuno] = useState<SunoCompiledPrompt | null>(null);
   const [sunoModelProfile, setSunoModelProfile] = useState<SunoModelId>('auto');
   const activeModelProfile = useMemo(() => resolveSunoModelProfile(sunoModelProfile), [sunoModelProfile]);
   const [isDirecting, setIsDirecting] = useState(false);
@@ -61,7 +61,6 @@ const App: React.FC = () => {
   const [directorEngine, setDirectorEngine] = useState<'gemini' | 'local' | 'unknown'>('unknown');
   const [directorFallbackReason, setDirectorFallbackReason] = useState<'overload' | 'unavailable' | null>(null);
   const [directorConfidence, setDirectorConfidence] = useState<number | null>(null);
-  const [promptHealth, setPromptHealth] = useState<PromptHealthResult | null>(null);
   const [aiModel, setAiModel] = useState('');
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
   
@@ -123,35 +122,37 @@ const App: React.FC = () => {
     return buildMusicIntentProfile(currentText, activeBlueprint, selections, src, conf, reason);
   }, [aiInput, optimizedIdea, activeBlueprint, selections, directorEngine, directorConfidence, directorFallbackReason]);
 
-  const sunoSettings = useMemo(() => {
-    if (compiledSuno?.settings) return compiledSuno.settings;
-    return recommendSunoSettings(aiInput || optimizedIdea, selections, sunoModelProfile, activeBlueprint);
-  }, [compiledSuno, aiInput, optimizedIdea, selections, sunoModelProfile, activeBlueprint]);
-
-  // Update prompt whenever selections, optimized idea, or activeIntentProfile change (Suno Prompt Compiler V2)
-  useEffect(() => {
+  // Canonical compilation, prompt health, package, and settings built atomically in the same render
+  const compiledSuno = useMemo(() => {
     const rawInput = (aiInput || optimizedIdea || '').trim();
-    const blueprint = activeBlueprint;
-    const compiled = compileSunoPrompt(rawInput, optimizedIdea, selections, sunoModelProfile, blueprint, activeIntentProfile || undefined);
-    setCompiledSuno(compiled);
-    setGeneratedPrompt(compiled.stylePrompt);
-    setPromptHealth(evaluatePromptHealth(rawInput, optimizedIdea, selections, compiled.stylePrompt, blueprint, activeIntentProfile || undefined, compiled));
-  }, [selections, optimizedIdea, aiInput, sunoModelProfile, activeBlueprint, activeIntentProfile]);
+    return compileSunoPrompt(rawInput, optimizedIdea, selections, sunoModelProfile, activeBlueprint, activeIntentProfile || undefined);
+  }, [aiInput, optimizedIdea, selections, sunoModelProfile, activeBlueprint, activeIntentProfile]);
+
+  const promptHealth = useMemo(() => {
+    const rawInput = (aiInput || optimizedIdea || '').trim();
+    return evaluatePromptHealth(rawInput, optimizedIdea, selections, compiledSuno.stylePrompt, activeBlueprint, activeIntentProfile || undefined, compiledSuno);
+  }, [aiInput, optimizedIdea, selections, compiledSuno, activeBlueprint, activeIntentProfile]);
 
   const sunoPackage = useMemo(() => {
-    if (!compiledSuno) return null;
     const source: 'gemini' | 'local' = directorEngine === 'gemini' ? 'gemini' : 'local';
     const healthScore = promptHealth?.score ?? 95;
     const confidenceScore = directorConfidence !== null ? directorConfidence : Math.round(activeBlueprint.confidence * 100);
     return buildSunoPackage(compiledSuno, source, healthScore, confidenceScore, sunoModelProfile);
   }, [compiledSuno, directorEngine, promptHealth, directorConfidence, activeBlueprint, sunoModelProfile]);
 
-  // Sync generated style prompt with model-adapted presentation
-  useEffect(() => {
-    if (sunoPackage?.stylePrompt) {
-      setGeneratedPrompt(sunoPackage.stylePrompt);
-    }
-  }, [sunoPackage?.stylePrompt]);
+  // Style prompt visible in textarea and export packs are guaranteed identical
+  const generatedPrompt = sunoPackage.stylePrompt;
+
+  const sunoSettings = useMemo(() => {
+    return {
+      model: sunoPackage.settings.model,
+      weirdness: sunoPackage.settings.weirdness,
+      styleInfluence: sunoPackage.settings.styleInfluence,
+      durationMinutes: compiledSuno.settings?.durationMinutes ?? 3.5,
+      exclude: sunoPackage.exclude,
+      note: compiledSuno.settings?.note ?? 'Các giá trị là điểm khởi đầu đề xuất. Sau khi nghe bản đầu tiên, tăng Style Influence nếu Suno đi lệch phong cách; tăng Weirdness nếu kết quả quá an toàn hoặc lặp lại.'
+    };
+  }, [sunoPackage, compiledSuno]);
 
   // Helpers
   const showFeedback = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -190,7 +191,6 @@ const App: React.FC = () => {
     setDirectorEngine('unknown');
     setDirectorFallbackReason(null);
     setDirectorConfidence(null);
-    setPromptHealth(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
     showFeedback('Đã xóa tất cả', 'info');
   };
@@ -1213,3 +1213,66 @@ const App: React.FC = () => {
 };
 
 export default App;
+
+/**
+ * Authoritative export payload helper: produces the exact text copied by
+ * the "Sao chép gói Suno hoàn chỉnh" button from the current canonical package.
+ */
+export const buildFullSunoExportPayload = (
+  pkg: SunoPackage,
+  lyricsOutput: string,
+  settings: SunoSettingsRecommendation
+): string => {
+  return buildSunoExportPack(pkg.stylePrompt, lyricsOutput, settings);
+};
+
+export interface CanonicalAppInputState {
+  aiInput: string;
+  optimizedIdea?: string;
+  selections: SelectionState;
+  sunoModelProfile: SunoModelId;
+  directorEngine?: 'gemini' | 'local' | 'unknown';
+  directorConfidence?: number | null;
+  lyricsOutput?: string;
+}
+
+/**
+ * Pure state evaluator replicating the exact atomic render calculation in App.tsx.
+ * Guarantees that visible generated Style, export settings, and clipboard package
+ * are built atomically from the same current compiled snapshot in the same render.
+ */
+export const computeCanonicalAppState = (input: CanonicalAppInputState) => {
+  const rawInput = (input.aiInput || input.optimizedIdea || '').trim();
+  const blueprint = buildMusicBlueprint(rawInput);
+  const intentProfile = rawInput ? buildMusicIntentProfile(
+    rawInput,
+    blueprint,
+    input.selections,
+    input.directorEngine === 'gemini' ? 'gemini' : 'local',
+    input.directorConfidence !== null && input.directorConfidence !== undefined ? input.directorConfidence : (blueprint.confidence * 100)
+  ) : null;
+  const compiled = compileSunoPrompt(rawInput, input.optimizedIdea || '', input.selections, input.sunoModelProfile, blueprint, intentProfile || undefined);
+  const health = evaluatePromptHealth(rawInput, input.optimizedIdea || '', input.selections, compiled.stylePrompt, blueprint, intentProfile || undefined, compiled);
+  const source: 'gemini' | 'local' = input.directorEngine === 'gemini' ? 'gemini' : 'local';
+  const confidenceScore = input.directorConfidence !== null && input.directorConfidence !== undefined ? input.directorConfidence : Math.round(blueprint.confidence * 100);
+  const pkg = buildSunoPackage(compiled, source, health.score, confidenceScore, input.sunoModelProfile);
+  const settings: SunoSettingsRecommendation = {
+    model: pkg.settings.model,
+    weirdness: pkg.settings.weirdness,
+    styleInfluence: pkg.settings.styleInfluence,
+    durationMinutes: compiled.settings?.durationMinutes ?? 3.5,
+    exclude: pkg.exclude,
+    note: compiled.settings?.note ?? 'Các giá trị là điểm khởi đầu đề xuất. Sau khi nghe bản đầu tiên, tăng Style Influence nếu Suno đi lệch phong cách; tăng Weirdness nếu kết quả quá an toàn hoặc lặp lại.'
+  };
+  const exportPayload = buildFullSunoExportPayload(pkg, input.lyricsOutput || '', settings);
+  const fullPackageText = formatFullSunoPackageText(pkg);
+  return {
+    compiled,
+    promptHealth: health,
+    sunoPackage: pkg,
+    generatedPrompt: pkg.stylePrompt,
+    sunoSettings: settings,
+    exportPayload,
+    fullPackageText
+  };
+};
