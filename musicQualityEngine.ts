@@ -86,7 +86,7 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
   // Negative lookahead on 'không' ensures we DO NOT match 'không khí' (atmosphere), 'không gian' (space), 'không chỉ' (not only)
   // Negative lookahead on 'no' ensures we DO NOT match 'no matter', 'no doubt'
   const triggerRegex =
-    /(?:^|[\.,;\n\(\)\s])(không(?:\s+(?:theo\s+phong\s+cách|dùng|có|muốn|cần|nên|được))?(?!\s*(?:khí|gian|chỉ)\b)|tuyệt\s+đối\s+không|tránh|loại\s+bỏ|đừng|chớ|without(?:\s+any)?|avoid|exclude|excluding|do\s+not(?:\s+use|\s+want|\s+include)?|don'?t(?:\s+use|\s+want|\s+include)?|never(?:\s+use)?|no(?!\s*(?:doubt|matter|one|body)\b)|not(?!\s+only\b))\s+/i;
+    /(?:^|[\.,;\n\(\)\s])((?:không|khong)(?:\s+(?:theo\s+phong\s+cách|theo\s+phong\s+cach|dùng|dung|có|co|muốn|muon|cần|can|nên|nen|được|duoc))?(?!\s*(?:khí|khi|gian|chỉ|chi)(?:$|[^\p{L}\p{N}]))|tuyệt\s+đối\s+không|tuyet\s+doi\s+khong|tránh|tranh|loại\s+bỏ|loai\s+bo|đừng|chớ|without(?:\s+any)?|avoid|exclude|excluding|do\s+not(?:\s+use|\s+want|\s+include)?|don'?t(?:\s+use|\s+want|\s+include)?|never(?:\s+use)?|no(?!\s*(?:doubt|matter|one|body)\b)|not(?!\s+only\b))\s+/iu;
 
   const contrastiveRegex =
     /\b(?:nhưng(?:\s+có)?|tuy\s+nhiên|thay\s+vào\s+đó|thay\s+vì|mà\s+là|but(?:\s+with)?|however|instead(?:\s+of)?|rather\s+than)\b/i;
@@ -292,13 +292,13 @@ export const extractExclusions = (rawInput: string): ExclusionProfile => {
       }
 
       // Check Vocals
-      if (/\b(?:giọng\s*nữ|female\s*vocals?|nữ\s*hát|female\s*voice)\b/i.test(p)) {
+      if (/(?:^|[^\p{L}\p{N}])(?:giọng\s*nữ(?:\s*chính)?|giong\s*nu(?:\s*chinh)?|vocal\s*nữ|vocal\s*nu|female\s*(?:(?:lead\s*)?vocals?|voices?|leads?|singers?)|nữ\s*hát(?:\s*chính)?|nu\s*hat(?:\s*chinh)?|ca\s*sĩ\s*nữ|ca\s*si\s*nu)(?:$|[^\p{L}\p{N}])/iu.test(p)) {
         excludeFemaleVocal = true;
         if (!rawExclusions.includes('Female Vocal')) rawExclusions.push('Female Vocal');
-      } else if (/\b(?:giọng\s*nam|(?<!fe)male\s*vocals?|nam\s*hát|(?<!fe)male\s*voice)\b/i.test(p)) {
+      } else if (/(?:^|[^\p{L}\p{N}])(?:giọng\s*nam(?:\s*chính)?|giong\s*nam(?:\s*chinh)?|vocal\s*nam|(?<!fe)male\s*(?:(?:lead\s*)?vocals?|voices?|leads?|singers?)|nam\s*hát(?:\s*chính)?|nam\s*hat(?:\s*chinh)?|ca\s*sĩ\s*nam|ca\s*si\s*nam)(?:$|[^\p{L}\p{N}])/iu.test(p)) {
         excludeMaleVocal = true;
         if (!rawExclusions.includes('Male Vocal')) rawExclusions.push('Male Vocal');
-      } else if (/\b(?:vocals?|giọng|hát|lời|tiếng\s*hát)\b/i.test(p)) {
+      } else if (/(?:^|[^\p{L}\p{N}])(?:vocals?|giọng|giong|hát|hat|lời|loi|tiếng\s*hát|tieng\s*hat|singing)(?:$|[^\p{L}\p{N}])/iu.test(p)) {
         excludeVocals = true;
         if (!rawExclusions.includes('Vocals')) rawExclusions.push('Vocals');
       }
@@ -426,6 +426,8 @@ export const isTagExcluded = (
       if (kw.includes('acoustic') && tagLower.includes('electric')) continue;
       // Don't let 'metal' exclusion falsely exclude non-metal terms
       if (kw === 'metal' && !tagLower.includes('metal')) continue;
+      // Don't let 'male' exclusion falsely exclude 'female' terms (since 'female' contains 'male')
+      if (/(?:^|\s)male\b/i.test(kw) && !kw.includes('female') && tagLower.includes('female')) continue;
       return true;
     }
   }
